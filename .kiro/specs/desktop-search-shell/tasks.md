@@ -24,7 +24,7 @@
   - _Boundary: SearchProvider_
   - _Touches: src/search/SearchProvider.ts_
 
-- [ ] 2.2 (P) Build the placeholder search provider
+- [x] 2.2 (P) Build the placeholder search provider
   - Provide fixture or simple local result data that conforms to the same provider contract future search systems will implement.
   - Return ranked results for representative natural language queries and an empty result for unmatched queries.
   - The provider can be exercised in tests without any indexing, OCR, embedding, or vector database dependency.
