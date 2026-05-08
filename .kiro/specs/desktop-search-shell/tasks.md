@@ -7,7 +7,7 @@
   - The app starts locally and renders a React root without runtime setup errors.
   - _Requirements: 1.1, 6.1_
 
-- [ ] 1.2 Add UI library and test infrastructure
+- [x] 1.2 Add UI library and test infrastructure
   - Install and configure Fluent UI React, Vitest, React Testing Library, and Playwright.
   - Add shared test setup so components can be rendered with the same providers used by the app.
   - A baseline render test and a smoke UI test can run from package scripts.

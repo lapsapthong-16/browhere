@@ -1,10 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 
 import { App } from "./App";
+import { renderWithAppProviders } from "../test/test-utils";
 
 describe("App", () => {
   it("renders a first-screen desktop search surface", () => {
-    render(<App />);
+    renderWithAppProviders(<App />);
 
     expect(
       screen.getByRole("searchbox", { name: /describe the file/i }),

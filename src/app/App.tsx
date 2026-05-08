@@ -1,3 +1,4 @@
+import { Button, Input, Label } from "@fluentui/react-components";
 import { useEffect, useRef } from "react";
 
 export function App() {
@@ -13,9 +14,9 @@ export function App() {
         <p className="app-kicker">Desktop Search</p>
         <h1 id="app-title">Search your files</h1>
         <form className="search-form" role="search" aria-label="File search">
-          <label htmlFor="file-query">Describe the file you remember</label>
+          <Label htmlFor="file-query">Describe the file you remember</Label>
           <div className="search-row">
-            <input
+            <Input
               ref={queryInputRef}
               id="file-query"
               name="query"
@@ -24,7 +25,9 @@ export function App() {
               placeholder="Quarterly budget spreadsheet from March"
               aria-describedby="search-hint"
             />
-            <button type="submit">Search</button>
+            <Button appearance="primary" type="submit">
+              Search
+            </Button>
           </div>
           <p id="search-hint">
             Start with a natural language memory of the file. Results will
