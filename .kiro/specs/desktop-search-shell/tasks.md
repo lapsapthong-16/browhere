@@ -41,7 +41,7 @@
   - _Depends: 2.1_
 
 - [ ] 3. Implement search coordination
-- [ ] 3.1 Build query submission and state transitions
+- [x] 3.1 Build query submission and state transitions
   - Handle non-empty submissions by entering loading state and invoking the provider with the user's query text.
   - Keep empty or whitespace-only submissions local and avoid provider calls.
   - Preserve provider `SearchResponse.readiness` on result and empty states so not-ready semantic searches do not collapse into generic no-match UI.
