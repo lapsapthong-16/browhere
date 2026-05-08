@@ -51,7 +51,7 @@
   - _Depends: 2.1, 2.2_
 
 - [ ] 4. Build the desktop search UI
-- [ ] 4.1 (P) Build the app shell and search input experience
+- [x] 4.1 (P) Build the app shell and search input experience
   - Present the search input as the primary first-screen control with no blocking marketing or onboarding surface.
   - Support mouse and keyboard submission for repeated searches from the same window.
   - Initial render shows a focused utility search surface ready for user input.
