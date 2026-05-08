@@ -1,0 +1,22 @@
+{
+  "feature_name": "local-file-indexer",
+  "created_at": "2026-05-07T05:46:57Z",
+  "updated_at": "2026-05-07T05:46:57Z",
+  "language": "en",
+  "phase": "tasks-generated",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "ready_for_implementation": true
+}
