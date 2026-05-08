@@ -32,7 +32,7 @@
   - _Boundary: LocalPlaceholderSearchProvider_
   - _Depends: 2.1_
 
-- [ ] 2.3 (P) Build the desktop file action contract and Tauri bridge
+- [x] 2.3 (P) Build the desktop file action contract and Tauri bridge
   - Define open and reveal action outcomes, including not allowed, not found, and operating system failure cases.
   - Add native command handling needed to open a file with the default app and reveal it in Explorer.
   - A mocked adapter test proves failures return typed errors instead of clearing or throwing through UI state.
