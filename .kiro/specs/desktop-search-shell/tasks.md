@@ -14,7 +14,7 @@
   - _Requirements: 6.1, 6.3_
 
 - [ ] 2. Define core contracts and placeholder data
-- [ ] 2.1 Create the search result and search state contracts
+- [x] 2.1 Create the search result and search state contracts
   - Define the typed result, match context, query, provider error, and search state shapes.
   - Add bounded `availabilityHint` support for UI-safe partial indexing and unavailability metadata.
   - Add query-level `SearchResponse.readiness` support and carry readiness through empty and result-bearing search states.
