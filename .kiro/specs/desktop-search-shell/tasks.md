@@ -78,7 +78,7 @@
   - _Depends: 3.1_
 
 - [ ] 5. Integrate file actions into result workflows
-- [ ] 5.1 Wire open and reveal controls into result items
+- [x] 5.1 Wire open and reveal controls into result items
   - Enable result actions only when the result contract marks them eligible.
   - Invoke the desktop file action adapter from explicit user activation on a displayed result.
   - Open and reveal controls are available from pointer and keyboard workflows.

@@ -3,15 +3,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ResultList } from "../components/ResultList";
 import { SearchBox } from "../components/SearchBox";
 import { SearchStatusView } from "../components/SearchStatusView";
+import { createTauriDesktopFileActions } from "../desktop/tauriFileActions";
 import { createLocalPlaceholderSearchProvider } from "../search/LocalPlaceholderSearchProvider";
 import { createSearchController } from "../search/SearchController";
+import type { DesktopFileActions } from "../desktop/DesktopFileActions";
 import type { SearchProvider, SearchState } from "../search/SearchProvider";
 
 interface AppProps {
   searchProvider?: SearchProvider;
+  desktopFileActions?: DesktopFileActions;
 }
 
-export function App({ searchProvider }: AppProps) {
+export function App({ searchProvider, desktopFileActions }: AppProps) {
   const queryInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [searchState, setSearchState] = useState<SearchState>({
@@ -24,6 +27,10 @@ export function App({ searchProvider }: AppProps) {
     [searchProvider],
   );
   const controller = useMemo(() => createSearchController(provider), [provider]);
+  const fileActions = useMemo(
+    () => desktopFileActions ?? createTauriDesktopFileActions(),
+    [desktopFileActions],
+  );
 
   useEffect(() => {
     queryInputRef.current?.focus();
@@ -73,6 +80,7 @@ export function App({ searchProvider }: AppProps) {
           <ResultList
             results={searchState.results}
             selectedId={searchState.selectedId}
+            fileActions={fileActions}
             onSelectResult={selectResult}
           />
         ) : null}

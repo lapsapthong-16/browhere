@@ -1,5 +1,6 @@
 import type { KeyboardEvent, Ref } from "react";
 
+import type { DesktopFileActions } from "../desktop/DesktopFileActions";
 import type { SearchResult } from "../search/SearchProvider";
 
 interface ResultItemProps {
@@ -7,6 +8,7 @@ interface ResultItemProps {
   selected: boolean;
   tabIndex: 0 | -1;
   itemRef: Ref<HTMLDivElement>;
+  fileActions: DesktopFileActions;
   onSelect: (resultId: string) => void;
   onMove: (direction: "previous" | "next" | "first" | "last") => void;
 }
@@ -16,6 +18,7 @@ export function ResultItem({
   selected,
   tabIndex,
   itemRef,
+  fileActions,
   onSelect,
   onMove,
 }: ResultItemProps) {
@@ -80,6 +83,30 @@ export function ResultItem({
           </div>
         ) : null}
       </dl>
+      <div className="result-actions" aria-label={`${result.displayName} actions`}>
+        <button
+          type="button"
+          disabled={!result.actions.canOpen}
+          aria-label={`Open ${result.displayName}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            void fileActions.openFile(result);
+          }}
+        >
+          Open
+        </button>
+        <button
+          type="button"
+          disabled={!result.actions.canReveal}
+          aria-label={`Show ${result.displayName} in folder`}
+          onClick={(event) => {
+            event.stopPropagation();
+            void fileActions.revealInFolder(result);
+          }}
+        >
+          Show in folder
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,17 +1,20 @@
 import { useMemo, useRef } from "react";
 
 import { ResultItem } from "./ResultItem";
+import type { DesktopFileActions } from "../desktop/DesktopFileActions";
 import type { SearchResult } from "../search/SearchProvider";
 
 interface ResultListProps {
   results: SearchResult[];
   selectedId?: string;
+  fileActions?: DesktopFileActions;
   onSelectResult: (resultId: string) => void;
 }
 
 export function ResultList({
   results,
   selectedId,
+  fileActions = noopFileActions,
   onSelectResult,
 }: ResultListProps) {
   const itemRefs = useRef(new Map<string, HTMLDivElement>());
@@ -54,6 +57,7 @@ export function ResultList({
               result={result}
               selected={selected}
               tabIndex={selected ? 0 : -1}
+              fileActions={fileActions}
               itemRef={(element) => {
                 if (element) {
                   itemRefs.current.set(result.id, element);
@@ -71,6 +75,15 @@ export function ResultList({
     </section>
   );
 }
+
+const noopFileActions: DesktopFileActions = {
+  async openFile() {
+    return { ok: true, value: undefined };
+  },
+  async revealInFolder() {
+    return { ok: true, value: undefined };
+  },
+};
 
 function getNextIndex(
   direction: "previous" | "next" | "first" | "last",

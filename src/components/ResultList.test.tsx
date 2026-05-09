@@ -2,6 +2,7 @@ import { fireEvent, screen, within } from "@testing-library/react";
 import { vi } from "vitest";
 
 import { ResultList } from "./ResultList";
+import type { DesktopFileActions } from "../desktop/DesktopFileActions";
 import { renderWithAppProviders } from "../test/test-utils";
 import type { SearchResult } from "../search/SearchProvider";
 
@@ -75,6 +76,45 @@ describe("ResultList", () => {
     fireEvent.keyDown(selected, { key: "End" });
     expect(onSelectResult).toHaveBeenLastCalledWith("whiteboard");
   });
+
+  it("invokes open and reveal actions from explicit controls", () => {
+    const fileActions = new CapturingFileActions();
+
+    renderWithAppProviders(
+      <ResultList
+        results={[unrankedResults[0]]}
+        selectedId="budget"
+        onSelectResult={() => undefined}
+        fileActions={fileActions}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /open q1 budget forecast/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /show q1 budget forecast.*folder/i }),
+    );
+
+    expect(fileActions.opened).toEqual(["budget"]);
+    expect(fileActions.revealed).toEqual(["budget"]);
+  });
+
+  it("disables unavailable result actions", () => {
+    const fileActions = new CapturingFileActions();
+
+    renderWithAppProviders(
+      <ResultList
+        results={[minimalResult]}
+        selectedId={minimalResult.id}
+        onSelectResult={() => undefined}
+        fileActions={fileActions}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /open scratch/i })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: /show scratch.*folder/i }),
+    ).toBeDisabled();
+  });
 });
 
 const unrankedResults: SearchResult[] = [
@@ -123,3 +163,18 @@ const minimalResult: SearchResult = {
     canReveal: false,
   },
 };
+
+class CapturingFileActions implements DesktopFileActions {
+  readonly opened: string[] = [];
+  readonly revealed: string[] = [];
+
+  async openFile(result: SearchResult) {
+    this.opened.push(result.id);
+    return { ok: true as const, value: undefined };
+  }
+
+  async revealInFolder(result: SearchResult) {
+    this.revealed.push(result.id);
+    return { ok: true as const, value: undefined };
+  }
+}
