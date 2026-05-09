@@ -223,3 +223,29 @@ test("file action failure keeps the current e2e results visible", async ({
     "Q1 Travel Budget.docx",
   );
 });
+
+test("visible shell controls stay scoped to desktop search workflow", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const searchbox = page.getByRole("searchbox", { name: /describe the file/i });
+  await searchbox.fill("quarterly budget spreadsheet from March");
+  await searchbox.press("Enter");
+
+  await expect(page.getByRole("option").first()).toContainText(
+    "Q1 Budget Forecast.xlsx",
+  );
+  await expect(page.getByRole("button")).toHaveText([
+    "Search",
+    "Open",
+    "Show in folder",
+    "Open",
+    "Show in folder",
+  ]);
+  await expect(
+    page.getByRole("button", {
+      name: /settings|index|ocr|embedding|model|provider|sync|preview|edit/i,
+    }),
+  ).toHaveCount(0);
+});

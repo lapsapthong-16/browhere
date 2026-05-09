@@ -107,7 +107,7 @@
   - Verify action failure feedback keeps the current results visible.
   - _Requirements: 2.5, 3.1, 3.2, 3.3, 3.4, 6.3, 6.5_
 
-- [ ] 6.3 Run contract and boundary validation
+- [x] 6.3 Run contract and boundary validation
   - Confirm every displayed result comes through the documented SearchProvider contract.
   - Confirm partial indexing metadata is represented only through the bounded `availabilityHint` enum.
   - Confirm unsupported enrichment fields do not appear in or break the shell UI.

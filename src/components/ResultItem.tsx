@@ -1,7 +1,7 @@
 import type { KeyboardEvent, Ref } from "react";
 
 import type { DesktopFileActions, FileActionError } from "../desktop/DesktopFileActions";
-import type { SearchResult } from "../search/SearchProvider";
+import type { AvailabilityHint, SearchResult } from "../search/SearchProvider";
 
 export interface ResultActionFailure {
   action: "open" | "reveal";
@@ -100,6 +100,11 @@ export function ResultItem({
         {result.matchContext ? (
           <p className="result-context">{result.matchContext.text}</p>
         ) : null}
+        {result.availabilityHint ? (
+          <p className="result-availability">
+            {getAvailabilityMessage(result.availabilityHint)}
+          </p>
+        ) : null}
       </div>
       <dl className="result-metadata" aria-label={`${result.displayName} metadata`}>
         {result.modifiedAt ? (
@@ -141,6 +146,46 @@ export function ResultItem({
       </div>
     </div>
   );
+}
+
+function getAvailabilityMessage(hint: AvailabilityHint): string {
+  if (hint.kind === "partial") {
+    return getPartialAvailabilityMessage(hint.reason);
+  }
+
+  return getUnavailableAvailabilityMessage(hint.reason);
+}
+
+function getPartialAvailabilityMessage(
+  reason: Extract<AvailabilityHint, { kind: "partial" }>["reason"],
+): string {
+  if (reason === "indexingPending") {
+    return "Some file details are still being prepared for search.";
+  }
+
+  if (reason === "contentLimited") {
+    return "File content details are limited for this result.";
+  }
+
+  if (reason === "visualLimited") {
+    return "Visual matching details are limited for this result.";
+  }
+
+  return "Some search details are temporarily limited for this result.";
+}
+
+function getUnavailableAvailabilityMessage(
+  reason: Extract<AvailabilityHint, { kind: "unavailable" }>["reason"],
+): string {
+  if (reason === "notIndexedYet") {
+    return "This file is not fully prepared for search.";
+  }
+
+  if (reason === "providerUnavailable") {
+    return "Some search details are temporarily unavailable for this result.";
+  }
+
+  return "Some file details are restricted for this result.";
 }
 
 function getFolderPath(filePath: string): string {

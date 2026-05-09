@@ -227,7 +227,8 @@ h1 {
 }
 
 .result-path,
-.result-context {
+.result-context,
+.result-availability {
   margin: 8px 0 0;
   overflow-wrap: anywhere;
   line-height: 1.45;
@@ -240,6 +241,11 @@ h1 {
 
 .result-context {
   color: #243b53;
+}
+
+.result-availability {
+  color: #627d98;
+  font-size: 0.875rem;
 }
 
 .result-metadata {

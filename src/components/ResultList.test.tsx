@@ -48,6 +48,41 @@ describe("ResultList", () => {
     expect(within(row).queryByText(/modified/i)).not.toBeInTheDocument();
   });
 
+  it("shows bounded availability hints without leaking unsupported enrichment", () => {
+    const enrichedResult = {
+      ...unrankedResults[1],
+      availabilityHint: {
+        kind: "partial",
+        reason: "visualLimited",
+      },
+      semanticScore: 0.93,
+      providerTraceId: "internal-trace-42",
+      rawEmbeddingStatus: "embeddingBackfillQueued",
+    } satisfies SearchResult & Record<string, unknown>;
+
+    renderWithAppProviders(
+      <ResultList
+        results={[enrichedResult]}
+        selectedId={enrichedResult.id}
+        onSelectResult={() => undefined}
+      />,
+    );
+
+    const row = screen.getByRole("option", {
+      name: /team offsite whiteboard/i,
+    });
+
+    expect(
+      within(row).getByText("Visual matching details are limited for this result."),
+    ).toBeInTheDocument();
+    expect(
+      within(row).queryByText(/semanticScore|providerTraceId/i),
+    ).not.toBeInTheDocument();
+    expect(
+      within(row).queryByText(/embedding|internal-trace/i),
+    ).not.toBeInTheDocument();
+  });
+
   it("marks selected results and supports keyboard movement", () => {
     const onSelectResult = vi.fn();
 
