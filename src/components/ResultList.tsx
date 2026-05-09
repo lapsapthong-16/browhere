@@ -1,6 +1,7 @@
 import { useMemo, useRef } from "react";
 
 import { ResultItem } from "./ResultItem";
+import type { ResultActionFailure } from "./ResultItem";
 import type { DesktopFileActions } from "../desktop/DesktopFileActions";
 import type { SearchResult } from "../search/SearchProvider";
 
@@ -8,6 +9,7 @@ interface ResultListProps {
   results: SearchResult[];
   selectedId?: string;
   fileActions?: DesktopFileActions;
+  onActionFailure?: (failure: ResultActionFailure) => void;
   onSelectResult: (resultId: string) => void;
 }
 
@@ -15,6 +17,7 @@ export function ResultList({
   results,
   selectedId,
   fileActions = noopFileActions,
+  onActionFailure,
   onSelectResult,
 }: ResultListProps) {
   const itemRefs = useRef(new Map<string, HTMLDivElement>());
@@ -58,6 +61,7 @@ export function ResultList({
               selected={selected}
               tabIndex={selected ? 0 : -1}
               fileActions={fileActions}
+              onActionFailure={onActionFailure}
               itemRef={(element) => {
                 if (element) {
                   itemRefs.current.set(result.id, element);

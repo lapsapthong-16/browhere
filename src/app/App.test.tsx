@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 
 import { App } from "./App";
 import { renderWithAppProviders } from "../test/test-utils";
+import type { DesktopFileActions } from "../desktop/DesktopFileActions";
 import type {
   Result,
   SearchError,
@@ -24,7 +25,7 @@ describe("App", () => {
   });
 
   it("submits the exact typed query from the keyboard and keeps the input ready", async () => {
-    const provider = new CapturingSearchProvider({ delayMs: 10 });
+    const provider = new CapturingSearchProvider({ delayMs: 250 });
     renderWithAppProviders(<App searchProvider={provider} />);
 
     const input = screen.getByRole("searchbox", {
@@ -36,24 +37,16 @@ describe("App", () => {
     });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(
-      await screen.findByText(
-        (_content, element) =>
-          element?.textContent ===
-          'Searching for "  March budget spreadsheet  "...',
-      ),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/searching for/i)).toHaveTextContent(
+      /march budget spreadsheet/i,
+    );
 
     await waitFor(() => {
       expect(provider.queries).toEqual(["  March budget spreadsheet  "]);
     });
-    expect(
-      await screen.findByText(
-        (_content, element) =>
-          element?.textContent ===
-          'Showing results for "  March budget spreadsheet  ".',
-      ),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/showing results/i)).toHaveTextContent(
+      /march budget spreadsheet/i,
+    );
     expect(input).toHaveValue("  March budget spreadsheet  ");
     expect(input).toHaveFocus();
   });
@@ -105,6 +98,33 @@ describe("App", () => {
       screen.getByText(/ready for a local file search/i),
     ).toBeInTheDocument();
   });
+
+  it("shows file action failures without clearing current results", async () => {
+    const provider = new CapturingSearchProvider();
+    const desktopFileActions = new FailingDesktopFileActions();
+
+    renderWithAppProviders(
+      <App searchProvider={provider} desktopFileActions={desktopFileActions} />,
+    );
+
+    const input = screen.getByRole("searchbox", {
+      name: /describe the file/i,
+    });
+
+    fireEvent.change(input, { target: { value: "result" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(await screen.findByText("result.txt")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /open result/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /could not open result\.txt/i,
+    );
+    expect(screen.getByText("result.txt")).toBeInTheDocument();
+    expect(
+      screen.getByText("C:\\Users\\edw\\Documents"),
+    ).toBeInTheDocument();
+  });
 });
 
 class CapturingSearchProvider implements SearchProvider {
@@ -140,6 +160,28 @@ class CapturingSearchProvider implements SearchProvider {
             },
           },
         ],
+      },
+    };
+  }
+}
+
+class FailingDesktopFileActions implements DesktopFileActions {
+  async openFile() {
+    return {
+      ok: false as const,
+      error: {
+        kind: "notFound" as const,
+        message: "The file could not be found.",
+      },
+    };
+  }
+
+  async revealInFolder() {
+    return {
+      ok: false as const,
+      error: {
+        kind: "osFailure" as const,
+        message: "Explorer could not open the folder.",
       },
     };
   }

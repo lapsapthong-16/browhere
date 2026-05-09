@@ -1,7 +1,13 @@
 import type { KeyboardEvent, Ref } from "react";
 
-import type { DesktopFileActions } from "../desktop/DesktopFileActions";
+import type { DesktopFileActions, FileActionError } from "../desktop/DesktopFileActions";
 import type { SearchResult } from "../search/SearchProvider";
+
+export interface ResultActionFailure {
+  action: "open" | "reveal";
+  result: SearchResult;
+  error: FileActionError;
+}
 
 interface ResultItemProps {
   result: SearchResult;
@@ -9,6 +15,7 @@ interface ResultItemProps {
   tabIndex: 0 | -1;
   itemRef: Ref<HTMLDivElement>;
   fileActions: DesktopFileActions;
+  onActionFailure?: (failure: ResultActionFailure) => void;
   onSelect: (resultId: string) => void;
   onMove: (direction: "previous" | "next" | "first" | "last") => void;
 }
@@ -19,6 +26,7 @@ export function ResultItem({
   tabIndex,
   itemRef,
   fileActions,
+  onActionFailure,
   onSelect,
   onMove,
 }: ResultItemProps) {
@@ -44,6 +52,30 @@ export function ResultItem({
     if (event.key === "End") {
       event.preventDefault();
       onMove("last");
+    }
+  };
+
+  const openFile = async () => {
+    const actionResult = await fileActions.openFile(result);
+
+    if (!actionResult.ok) {
+      onActionFailure?.({
+        action: "open",
+        result,
+        error: actionResult.error,
+      });
+    }
+  };
+
+  const revealInFolder = async () => {
+    const actionResult = await fileActions.revealInFolder(result);
+
+    if (!actionResult.ok) {
+      onActionFailure?.({
+        action: "reveal",
+        result,
+        error: actionResult.error,
+      });
     }
   };
 
@@ -90,7 +122,7 @@ export function ResultItem({
           aria-label={`Open ${result.displayName}`}
           onClick={(event) => {
             event.stopPropagation();
-            void fileActions.openFile(result);
+            void openFile();
           }}
         >
           Open
@@ -101,7 +133,7 @@ export function ResultItem({
           aria-label={`Show ${result.displayName} in folder`}
           onClick={(event) => {
             event.stopPropagation();
-            void fileActions.revealInFolder(result);
+            void revealInFolder();
           }}
         >
           Show in folder

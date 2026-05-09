@@ -86,7 +86,7 @@
   - _Boundary: ResultItem, DesktopFileActions_
   - _Depends: 2.3, 4.2_
 
-- [ ] 5.2 Preserve results while showing action failures
+- [x] 5.2 Preserve results while showing action failures
   - Display actionable open or reveal failure messages without clearing the current query or result list.
   - Explain inaccessible files when the adapter reports not found or operating system failure.
   - Tests verify action errors do not reorder, remove, or replace current results.

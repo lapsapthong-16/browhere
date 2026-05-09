@@ -1,23 +1,39 @@
+import type { FileActionError } from "../desktop/DesktopFileActions";
 import type { SearchReadiness, SearchState } from "../search/SearchProvider";
 
 interface SearchStatusViewProps {
   state: SearchState;
+  actionFailure?: SearchActionFailure;
 }
 
-export function SearchStatusView({ state }: SearchStatusViewProps) {
+export interface SearchActionFailure {
+  action: "open" | "reveal";
+  resultName: string;
+  error: FileActionError;
+}
+
+export function SearchStatusView({ state, actionFailure }: SearchStatusViewProps) {
+  const fileActionAlert = actionFailure ? (
+    <p className="action-failure" role="alert">
+      {getFileActionFailureMessage(actionFailure)}
+    </p>
+  ) : null;
+
   if (state.status === "loading") {
     return (
-      <p id="search-feedback" className="search-feedback" aria-live="polite">
-        Searching for "{state.query}"...
-      </p>
+      <div id="search-feedback" className="search-feedback" aria-live="polite">
+        <p>Searching for "{state.query}"...</p>
+        {fileActionAlert}
+      </div>
     );
   }
 
   if (state.status === "results") {
     return (
-      <p id="search-feedback" className="search-feedback" aria-live="polite">
-        Showing results for "{state.query}".
-      </p>
+      <div id="search-feedback" className="search-feedback" aria-live="polite">
+        <p>Showing results for "{state.query}".</p>
+        {fileActionAlert}
+      </div>
     );
   }
 
@@ -28,6 +44,7 @@ export function SearchStatusView({ state }: SearchStatusViewProps) {
         {state.readiness.kind === "notReady" ? (
           <p>{getReadinessReason(state.readiness.reason)}</p>
         ) : null}
+        {fileActionAlert}
       </div>
     );
   }
@@ -41,9 +58,10 @@ export function SearchStatusView({ state }: SearchStatusViewProps) {
   }
 
   return (
-    <p id="search-feedback" className="search-feedback" aria-live="polite">
-      Ready for a local file search.
-    </p>
+    <div id="search-feedback" className="search-feedback" aria-live="polite">
+      <p>Ready for a local file search.</p>
+      {fileActionAlert}
+    </div>
   );
 }
 
@@ -71,3 +89,22 @@ type SearchReadinessReason = Extract<
   SearchReadiness,
   { kind: "notReady" }
 >["reason"];
+
+function getFileActionFailureMessage(failure: SearchActionFailure): string {
+  const actionText = failure.action === "open" ? "open" : "show";
+  const recovery = getFileActionRecovery(failure.error);
+
+  return `Could not ${actionText} ${failure.resultName}: ${failure.error.message} ${recovery}`;
+}
+
+function getFileActionRecovery(error: FileActionError): string {
+  if (error.kind === "notFound") {
+    return "Check whether the file moved, then search again.";
+  }
+
+  if (error.kind === "notAllowed") {
+    return "Choose another available action for this result.";
+  }
+
+  return "Try again or open the containing folder manually.";
+}

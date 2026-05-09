@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ResultList } from "../components/ResultList";
+import type { ResultActionFailure } from "../components/ResultItem";
 import { SearchBox } from "../components/SearchBox";
 import { SearchStatusView } from "../components/SearchStatusView";
+import type { SearchActionFailure } from "../components/SearchStatusView";
 import { createTauriDesktopFileActions } from "../desktop/tauriFileActions";
 import { createLocalPlaceholderSearchProvider } from "../search/LocalPlaceholderSearchProvider";
 import { createSearchController } from "../search/SearchController";
@@ -21,6 +23,7 @@ export function App({ searchProvider, desktopFileActions }: AppProps) {
     status: "initial",
     query: "",
   });
+  const [actionFailure, setActionFailure] = useState<SearchActionFailure>();
   const activeSearchIdRef = useRef(0);
   const provider = useMemo(
     () => searchProvider ?? createLocalPlaceholderSearchProvider(),
@@ -46,6 +49,7 @@ export function App({ searchProvider, desktopFileActions }: AppProps) {
     const activeQuery = query;
     const searchId = activeSearchIdRef.current + 1;
     activeSearchIdRef.current = searchId;
+    setActionFailure(undefined);
     setSearchState({ status: "loading", query: activeQuery });
 
     void controller.submit({ text: activeQuery }).then((nextState) => {
@@ -63,6 +67,14 @@ export function App({ searchProvider, desktopFileActions }: AppProps) {
     [controller],
   );
 
+  const handleActionFailure = useCallback((failure: ResultActionFailure) => {
+    setActionFailure({
+      action: failure.action,
+      resultName: failure.result.displayName,
+      error: failure.error,
+    });
+  }, []);
+
   return (
     <main className="app-shell" aria-labelledby="app-title">
       <section className="search-surface">
@@ -75,12 +87,13 @@ export function App({ searchProvider, desktopFileActions }: AppProps) {
           onQueryChange={setQuery}
           onSubmit={submitSearch}
         />
-        <SearchStatusView state={searchState} />
+        <SearchStatusView state={searchState} actionFailure={actionFailure} />
         {searchState.status === "results" ? (
           <ResultList
             results={searchState.results}
             selectedId={searchState.selectedId}
             fileActions={fileActions}
+            onActionFailure={handleActionFailure}
             onSelectResult={selectResult}
           />
         ) : null}
