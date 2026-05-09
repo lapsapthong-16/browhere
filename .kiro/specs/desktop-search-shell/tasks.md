@@ -68,7 +68,7 @@
   - _Boundary: ResultList, ResultItem_
   - _Depends: 3.1_
 
-- [ ] 4.3 (P) Build search status views
+- [x] 4.3 (P) Build search status views
   - Render initial, loading, empty, and error states from the search state model.
   - Empty and error states reference the active query and avoid exposing indexing, OCR, embedding, or AI provider internals.
   - Distinguish ready empty states from query-level not-ready states using only the bounded readiness reason.

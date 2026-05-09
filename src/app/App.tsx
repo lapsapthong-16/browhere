@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ResultList } from "../components/ResultList";
 import { SearchBox } from "../components/SearchBox";
+import { SearchStatusView } from "../components/SearchStatusView";
 import { createLocalPlaceholderSearchProvider } from "../search/LocalPlaceholderSearchProvider";
 import { createSearchController } from "../search/SearchController";
 import type { SearchProvider, SearchState } from "../search/SearchProvider";
@@ -67,7 +68,7 @@ export function App({ searchProvider }: AppProps) {
           onQueryChange={setQuery}
           onSubmit={submitSearch}
         />
-        <SearchFeedback state={searchState} />
+        <SearchStatusView state={searchState} />
         {searchState.status === "results" ? (
           <ResultList
             results={searchState.results}
@@ -77,45 +78,5 @@ export function App({ searchProvider }: AppProps) {
         ) : null}
       </section>
     </main>
-  );
-}
-
-function SearchFeedback({ state }: { state: SearchState }) {
-  if (state.status === "loading") {
-    return (
-      <p id="search-feedback" className="search-feedback" aria-live="polite">
-        Searching for "{state.query}"...
-      </p>
-    );
-  }
-
-  if (state.status === "results") {
-    return (
-      <p id="search-feedback" className="search-feedback" aria-live="polite">
-        Showing results for "{state.query}".
-      </p>
-    );
-  }
-
-  if (state.status === "empty") {
-    return (
-      <p id="search-feedback" className="search-feedback" aria-live="polite">
-        No results found for "{state.query}".
-      </p>
-    );
-  }
-
-  if (state.status === "error") {
-    return (
-      <p id="search-feedback" className="search-feedback" role="alert">
-        Search failed for "{state.query}": {state.message}
-      </p>
-    );
-  }
-
-  return (
-    <p id="search-feedback" className="search-feedback" aria-live="polite">
-      Ready for a local file search.
-    </p>
   );
 }
