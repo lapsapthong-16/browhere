@@ -60,7 +60,7 @@
   - _Depends: 3.1_
   - _Touches: src/app/App.tsx_
 
-- [ ] 4.2 (P) Build ranked result list and result item presentation
+- [x] 4.2 (P) Build ranked result list and result item presentation
   - Display results in ranked order with filename, type, path context, modified date when available, and optional match context.
   - Preserve usable rows when optional size, date, or match context are absent.
   - The selected or focused result is visually distinct and can be reached by keyboard.

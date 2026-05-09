@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { ResultList } from "../components/ResultList";
 import { SearchBox } from "../components/SearchBox";
 import { createLocalPlaceholderSearchProvider } from "../search/LocalPlaceholderSearchProvider";
 import { createSearchController } from "../search/SearchController";
@@ -47,6 +48,13 @@ export function App({ searchProvider }: AppProps) {
     });
   }, [controller, query]);
 
+  const selectResult = useCallback(
+    (resultId: string) => {
+      setSearchState(controller.selectResult(resultId));
+    },
+    [controller],
+  );
+
   return (
     <main className="app-shell" aria-labelledby="app-title">
       <section className="search-surface">
@@ -60,6 +68,13 @@ export function App({ searchProvider }: AppProps) {
           onSubmit={submitSearch}
         />
         <SearchFeedback state={searchState} />
+        {searchState.status === "results" ? (
+          <ResultList
+            results={searchState.results}
+            selectedId={searchState.selectedId}
+            onSelectResult={selectResult}
+          />
+        ) : null}
       </section>
     </main>
   );
