@@ -1,6 +1,9 @@
 import { placeholderResults } from "../data/placeholderResults";
 import { isSearchResult } from "./SearchProvider";
-import { createLocalPlaceholderSearchProvider } from "./LocalPlaceholderSearchProvider";
+import {
+  createLocalPlaceholderSearchProvider,
+  placeholderProviderErrorQuery,
+} from "./LocalPlaceholderSearchProvider";
 
 describe("LocalPlaceholderSearchProvider", () => {
   it("keeps fixture data compatible with the shared SearchProvider contract", () => {
@@ -76,6 +79,22 @@ describe("LocalPlaceholderSearchProvider", () => {
     expect(response.value).toEqual({
       readiness: { kind: "ready" },
       results: [],
+    });
+  });
+
+  it("can return a typed provider error for workflow validation", async () => {
+    const provider = createLocalPlaceholderSearchProvider();
+
+    const response = await provider.search({
+      text: placeholderProviderErrorQuery,
+    });
+
+    expect(response).toEqual({
+      ok: false,
+      error: {
+        kind: "providerUnavailable",
+        message: "Search is temporarily unavailable.",
+      },
     });
   });
 });

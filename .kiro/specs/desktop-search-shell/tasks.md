@@ -95,7 +95,7 @@
   - _Depends: 5.1_
 
 - [ ] 6. Validate the complete shell workflow
-- [ ] 6.1 Add end-to-end search workflow coverage
+- [x] 6.1 Add end-to-end search workflow coverage
   - Cover app launch, natural language query submission, loading feedback, ranked results, empty state, and provider error state.
   - Verify repeated searches work from the same app window without stale state.
   - The E2E suite demonstrates the shell workflow without depending on a real indexer or semantic backend.

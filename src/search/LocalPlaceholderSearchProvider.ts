@@ -15,15 +15,42 @@ type ScoredResult = {
 
 const tokenPattern = /[a-z0-9]+/g;
 const ignoredTokens = new Set(["a", "an", "and", "for", "from", "of", "the", "to"]);
+export const placeholderProviderErrorQuery = "__provider_error__";
 
-export function createLocalPlaceholderSearchProvider(): SearchProvider {
-  return new LocalPlaceholderSearchProvider();
+interface LocalPlaceholderSearchProviderOptions {
+  delayMs?: number;
+}
+
+export function createLocalPlaceholderSearchProvider(
+  options: LocalPlaceholderSearchProviderOptions = {},
+): SearchProvider {
+  return new LocalPlaceholderSearchProvider(options);
 }
 
 export class LocalPlaceholderSearchProvider implements SearchProvider {
+  constructor(
+    private readonly options: LocalPlaceholderSearchProviderOptions = {},
+  ) {}
+
   async search(
     query: SearchQuery,
   ): Promise<Result<SearchResponse, SearchError>> {
+    if (this.options.delayMs !== undefined) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, this.options.delayMs);
+      });
+    }
+
+    if (query.text.trim() === placeholderProviderErrorQuery) {
+      return {
+        ok: false,
+        error: {
+          kind: "providerUnavailable",
+          message: "Search is temporarily unavailable.",
+        },
+      };
+    }
+
     const tokens = tokenize(query.text);
 
     if (tokens.length === 0) {

@@ -26,7 +26,7 @@ export function App({ searchProvider, desktopFileActions }: AppProps) {
   const [actionFailure, setActionFailure] = useState<SearchActionFailure>();
   const activeSearchIdRef = useRef(0);
   const provider = useMemo(
-    () => searchProvider ?? createLocalPlaceholderSearchProvider(),
+    () => searchProvider ?? createLocalPlaceholderSearchProvider({ delayMs: 75 }),
     [searchProvider],
   );
   const controller = useMemo(() => createSearchController(provider), [provider]);
