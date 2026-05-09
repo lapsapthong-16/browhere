@@ -101,7 +101,7 @@
   - The E2E suite demonstrates the shell workflow without depending on a real indexer or semantic backend.
   - _Requirements: 1.1, 1.2, 1.4, 1.5, 2.1, 4.1, 4.2, 4.3, 4.4, 4.5, 5.2_
 
-- [ ] 6.2 Add end-to-end keyboard and file action coverage
+- [x] 6.2 Add end-to-end keyboard and file action coverage
   - Cover keyboard movement between search input, results, and primary result actions.
   - Verify open and reveal success paths through a mocked or test-safe desktop action boundary.
   - Verify action failure feedback keeps the current results visible.

@@ -31,7 +31,7 @@ export function App({ searchProvider, desktopFileActions }: AppProps) {
   );
   const controller = useMemo(() => createSearchController(provider), [provider]);
   const fileActions = useMemo(
-    () => desktopFileActions ?? createTauriDesktopFileActions(),
+    () => desktopFileActions ?? createDefaultDesktopFileActions(),
     [desktopFileActions],
   );
 
@@ -100,4 +100,21 @@ export function App({ searchProvider, desktopFileActions }: AppProps) {
       </section>
     </main>
   );
+}
+
+type TestDesktopFileActionsWindow = Window & {
+  __browhereDesktopFileActions?: DesktopFileActions;
+};
+
+function createDefaultDesktopFileActions(): DesktopFileActions {
+  if (import.meta.env.DEV && typeof window !== "undefined") {
+    const testActions = (window as TestDesktopFileActionsWindow)
+      .__browhereDesktopFileActions;
+
+    if (testActions) {
+      return testActions;
+    }
+  }
+
+  return createTauriDesktopFileActions();
 }
