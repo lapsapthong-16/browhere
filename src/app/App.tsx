@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ResultList } from "../components/ResultList";
+import { IndexSettingsPanel } from "../components/IndexSettingsPanel";
 import type { ResultActionFailure } from "../components/ResultItem";
 import { SearchBox } from "../components/SearchBox";
 import { SearchStatusView } from "../components/SearchStatusView";
@@ -8,6 +9,7 @@ import type { SearchActionFailure } from "../components/SearchStatusView";
 import { createTauriDesktopFileActions } from "../desktop/tauriFileActions";
 import { createLocalPlaceholderSearchProvider } from "../search/LocalPlaceholderSearchProvider";
 import { createSearchController } from "../search/SearchController";
+import { createTauriSearchProvider } from "../search/tauriSearchProvider";
 import type { DesktopFileActions } from "../desktop/DesktopFileActions";
 import type { SearchProvider, SearchState } from "../search/SearchProvider";
 
@@ -26,7 +28,7 @@ export function App({ searchProvider, desktopFileActions }: AppProps) {
   const [actionFailure, setActionFailure] = useState<SearchActionFailure>();
   const activeSearchIdRef = useRef(0);
   const provider = useMemo(
-    () => searchProvider ?? createLocalPlaceholderSearchProvider({ delayMs: 75 }),
+    () => searchProvider ?? createDefaultSearchProvider(),
     [searchProvider],
   );
   const controller = useMemo(() => createSearchController(provider), [provider]);
@@ -97,9 +99,22 @@ export function App({ searchProvider, desktopFileActions }: AppProps) {
             onSelectResult={selectResult}
           />
         ) : null}
+        <IndexSettingsPanel />
       </section>
     </main>
   );
+}
+
+type TauriRuntimeWindow = Window & {
+  __TAURI_INTERNALS__?: unknown;
+};
+
+function createDefaultSearchProvider(): SearchProvider {
+  if (typeof window !== "undefined" && (window as TauriRuntimeWindow).__TAURI_INTERNALS__) {
+    return createTauriSearchProvider();
+  }
+
+  return createLocalPlaceholderSearchProvider({ delayMs: 75 });
 }
 
 type TestDesktopFileActionsWindow = Window & {

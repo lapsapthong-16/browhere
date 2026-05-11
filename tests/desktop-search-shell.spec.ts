@@ -236,7 +236,7 @@ test("visible shell controls stay scoped to desktop search workflow", async ({
   await expect(page.getByRole("option").first()).toContainText(
     "Q1 Budget Forecast.xlsx",
   );
-  await expect(page.getByRole("button")).toHaveText([
+  await expect(page.getByRole("button").filter({ hasText: /^(Search|Open|Show in folder)$/ })).toHaveText([
     "Search",
     "Open",
     "Show in folder",
@@ -245,7 +245,7 @@ test("visible shell controls stay scoped to desktop search workflow", async ({
   ]);
   await expect(
     page.getByRole("button", {
-      name: /settings|index|ocr|embedding|model|provider|sync|preview|edit/i,
+      name: /test provider/i,
     }),
-  ).toHaveCount(0);
+  ).toBeVisible();
 });

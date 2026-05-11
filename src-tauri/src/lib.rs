@@ -1,11 +1,21 @@
 mod file_actions;
+mod search_engine;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(search_engine::SearchEngineState::default())
         .invoke_handler(tauri::generate_handler![
             file_actions::open_file,
-            file_actions::reveal_in_folder
+            file_actions::reveal_in_folder,
+            search_engine::get_settings,
+            search_engine::save_ai_settings,
+            search_engine::test_ai_provider,
+            search_engine::get_index_status,
+            search_engine::add_index_folder,
+            search_engine::remove_index_folder,
+            search_engine::start_indexing,
+            search_engine::search_files
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Browhere desktop search shell");
