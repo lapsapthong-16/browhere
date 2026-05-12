@@ -14,6 +14,7 @@ tauri-build = { version = "=2.0.0", features = [] }
 
 [dependencies]
 base64 = "0.22"
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
 lopdf = "0.35"
 quick-xml = "0.37"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
@@ -22,4 +23,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlite-vec = "0.1.9"
 tauri = { version = "=2.0.0", features = [] }
+tauri-plugin-dialog = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }

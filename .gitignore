@@ -1,7 +1,8 @@
 node_modules
 .codex
 dist/
-,env
+.env
 *.log
+ERROR.md
 coverage
 src-tauri/target

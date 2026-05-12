@@ -245,7 +245,9 @@ test("visible shell controls stay scoped to desktop search workflow", async ({
   ]);
   await expect(
     page.getByRole("button", {
-      name: /test provider/i,
+      name: /add folder/i,
     }),
   ).toBeVisible();
+  await expect(page.getByRole("button", { name: /update index/i })).toBeVisible();
+  await expect(page.getByText(/gemini-embedding-2/i)).toBeVisible();
 });

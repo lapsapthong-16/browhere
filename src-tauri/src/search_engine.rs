@@ -11,6 +11,9 @@ use std::fs;
 use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Mutex;
 use std::sync::Once;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,7 +21,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const SUPPORTED_EXTENSIONS: &[&str] = &["pdf", "docx", "txt", "md", "png", "jpg", "jpeg", "webp"];
 const MAX_TEXT_BYTES: u64 = 2 * 1024 * 1024;
 const DEFAULT_LIMIT: usize = 20;
+const KEYRING_SERVICE: &str = "Browhere";
+const FIXED_GEMINI_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta";
+const FIXED_GEMINI_MODEL: &str = "gemini-embedding-2";
+const FIXED_GEMINI_DIMENSIONS: usize = 3072;
+const FIXED_GROQ_ENDPOINT: &str = "https://api.groq.com/openai/v1/chat/completions";
+const FIXED_GROQ_MODEL: &str = "llama-3.3-70b-versatile";
 static SQLITE_VEC_INIT: Once = Once::new();
+static CANCEL_INDEXING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 pub struct SearchEngineState {
@@ -78,6 +88,55 @@ pub struct IndexStatus {
     pub indexed_chunk_count: usize,
     pub last_error: Option<String>,
     pub message: String,
+    pub current_file_path: Option<String>,
+    pub failed_file_count: usize,
+    pub skipped_file_count: usize,
+    pub can_cancel: bool,
+    pub last_indexed_at: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexErrorEntry {
+    pub file_path: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeConfigStatus {
+    pub embedding_model: String,
+    pub embedding_dimensions: usize,
+    pub gemini_key_present: bool,
+    pub groq_endpoint: String,
+    pub groq_model: String,
+    pub groq_key_present: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileIndexStatus {
+    pub path: String,
+    pub display_name: String,
+    pub file_type: String,
+    pub size_bytes: Option<u64>,
+    pub modified_at: Option<u64>,
+    pub status: FileIndexState,
+    pub reason: Option<String>,
+    pub indexed_at: Option<u64>,
+    pub chunk_count: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FileIndexState {
+    Indexed,
+    New,
+    Changed,
+    Missing,
+    Failed,
+    Partial,
+    Unsupported,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -147,9 +206,13 @@ struct AppStore {
     indexed_folders: Vec<String>,
     files: Vec<IndexedFile>,
     chunks: Vec<IndexedChunk>,
+    errors: Vec<IndexErrorEntry>,
     active_embedding_signature: Option<String>,
     index_state: IndexState,
     last_error: Option<String>,
+    current_file_path: Option<String>,
+    skipped_file_count: usize,
+    last_indexed_at: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -162,6 +225,10 @@ struct IndexedFile {
     modified_key: u64,
     size_bytes: Option<u64>,
     extraction_status: ExtractionStatus,
+    indexed_at: Option<u64>,
+    chunk_count: usize,
+    embedding_kind: String,
+    last_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -182,7 +249,17 @@ struct IndexedChunk {
 
 struct IndexedDocument {
     file: IndexedFile,
-    chunk_texts: Vec<String>,
+    chunks: Vec<DocumentChunk>,
+}
+
+struct DocumentChunk {
+    text: String,
+    payload: EmbeddingPayload,
+}
+
+enum EmbeddingPayload {
+    Text(String),
+    InlineData { mime_type: String, data_base64: String },
 }
 
 impl Default for AppStore {
@@ -190,17 +267,21 @@ impl Default for AppStore {
         Self {
             ai: AiSettings {
                 provider: AiProviderKind::GoogleGemini,
-                endpoint: "https://generativelanguage.googleapis.com/v1beta".to_string(),
-                model: "text-embedding-004".to_string(),
-                embedding_dimension: 768,
+                endpoint: FIXED_GEMINI_ENDPOINT.to_string(),
+                model: FIXED_GEMINI_MODEL.to_string(),
+                embedding_dimension: FIXED_GEMINI_DIMENSIONS,
                 api_key: None,
             },
             indexed_folders: Vec::new(),
             files: Vec::new(),
             chunks: Vec::new(),
+            errors: Vec::new(),
             active_embedding_signature: None,
             index_state: IndexState::NotConfigured,
             last_error: None,
+            current_file_path: None,
+            skipped_file_count: 0,
+            last_indexed_at: None,
         }
     }
 }
@@ -218,10 +299,18 @@ pub fn save_ai_settings(settings: AiSettings, state: tauri::State<SearchEngineSt
     let mut store = load_store(&state);
     let old_signature = embedding_signature(&store.ai);
     let mut next_settings = settings;
-    if next_settings.api_key.as_deref().unwrap_or("").is_empty()
-        && next_settings.provider == store.ai.provider
-    {
-        next_settings.api_key = store.ai.api_key.clone();
+    if next_settings.api_key.as_deref().unwrap_or("").is_empty() {
+        next_settings.api_key = read_api_key(&next_settings.provider).ok();
+    } else if let Some(api_key) = next_settings.api_key.as_deref() {
+        if let Err(error) = write_api_key(&next_settings.provider, api_key) {
+            store.index_state = IndexState::Failed;
+            store.last_error = Some(error);
+            persist_store(&store).ok();
+            replace_store(&state, store.clone());
+            return SettingsResponse {
+                ai: to_public_settings(&store.ai),
+            };
+        }
     }
     let new_signature = embedding_signature(&next_settings);
     store.ai = next_settings;
@@ -237,13 +326,35 @@ pub fn save_ai_settings(settings: AiSettings, state: tauri::State<SearchEngineSt
 }
 
 #[tauri::command]
+pub fn clear_api_key(provider: AiProviderKind, state: tauri::State<SearchEngineState>) -> SettingsResponse {
+    let mut store = load_store(&state);
+    let _ = delete_api_key(&provider);
+    if store.ai.provider == provider {
+        store.ai.api_key = None;
+        store.index_state = if store.indexed_folders.is_empty() {
+            IndexState::NotConfigured
+        } else {
+            IndexState::Stale
+        };
+    }
+    persist_store(&store).ok();
+    replace_store(&state, store.clone());
+    SettingsResponse {
+        ai: to_public_settings(&store.ai),
+    }
+}
+
+#[tauri::command]
 pub fn test_ai_provider(settings: AiSettings) -> ProviderStatus {
-    match create_provider(&settings).and_then(|provider| provider.embed_query("hello world")) {
-        Ok(vector) if vector.len() == settings.embedding_dimension => ProviderStatus {
+    match settings_with_stored_key(settings)
+        .and_then(|settings| create_provider(&settings).map(|provider| (settings, provider)))
+        .and_then(|(settings, provider)| provider.embed_query("hello world").map(|vector| (settings, vector)))
+    {
+        Ok((settings, vector)) if vector.len() == settings.embedding_dimension => ProviderStatus {
             ok: true,
             message: format!("Provider returned {} dimensions.", vector.len()),
         },
-        Ok(vector) => ProviderStatus {
+        Ok((settings, vector)) => ProviderStatus {
             ok: false,
             message: format!(
                 "Provider returned {} dimensions, expected {}.",
@@ -265,20 +376,77 @@ pub fn get_index_status(state: tauri::State<SearchEngineState>) -> IndexStatus {
 }
 
 #[tauri::command]
-pub fn add_index_folder(path: String, state: tauri::State<SearchEngineState>) -> IndexStatus {
+pub fn get_index_errors(limit: Option<usize>, state: tauri::State<SearchEngineState>) -> Vec<IndexErrorEntry> {
+    let store = load_store(&state);
+    store
+        .errors
+        .iter()
+        .rev()
+        .take(limit.unwrap_or(20))
+        .cloned()
+        .collect()
+}
+
+#[tauri::command]
+pub fn get_runtime_config_status() -> RuntimeConfigStatus {
+    RuntimeConfigStatus {
+        embedding_model: FIXED_GEMINI_MODEL.to_string(),
+        embedding_dimensions: FIXED_GEMINI_DIMENSIONS,
+        gemini_key_present: load_secret("GEMINI_API_KEY").is_some(),
+        groq_endpoint: FIXED_GROQ_ENDPOINT.to_string(),
+        groq_model: FIXED_GROQ_MODEL.to_string(),
+        groq_key_present: load_secret("GROQ_API_KEY").is_some(),
+    }
+}
+
+#[tauri::command]
+pub fn get_folder_file_status(folder: Option<String>, state: tauri::State<SearchEngineState>) -> Vec<FileIndexStatus> {
+    let store = load_store(&state);
+    let folders = folder.map(|value| vec![value]).unwrap_or_else(|| store.indexed_folders.clone());
+    collect_file_statuses(&store, &folders)
+}
+
+#[tauri::command]
+pub fn get_file_index_status(path: String, state: tauri::State<SearchEngineState>) -> FileIndexStatus {
+    let store = load_store(&state);
+    file_status_for_path(&store, Path::new(&path))
+}
+
+#[tauri::command]
+pub fn cancel_indexing(state: tauri::State<SearchEngineState>) -> IndexStatus {
+    CANCEL_INDEXING.store(true, AtomicOrdering::SeqCst);
+    let mut store = load_store(&state);
+    if store.index_state == IndexState::Indexing {
+        store.index_state = IndexState::Failed;
+        store.last_error = Some("Indexing canceled.".to_string());
+        store.current_file_path = None;
+        persist_store(&store).ok();
+        replace_store(&state, store.clone());
+    }
+    to_index_status(&store)
+}
+
+#[tauri::command]
+pub fn add_index_folder(path: String, state: tauri::State<SearchEngineState>) -> Result<IndexStatus, String> {
     let mut store = load_store(&state);
     let folder = PathBuf::from(&path);
     if !folder.is_dir() {
         store.index_state = IndexState::Failed;
         store.last_error = Some("Folder does not exist or is not readable.".to_string());
     } else if !store.indexed_folders.iter().any(|entry| entry == &path) {
-        store.indexed_folders.push(path);
+        let normalized_path = folder
+            .canonicalize()
+            .unwrap_or(folder)
+            .to_string_lossy()
+            .to_string();
+        if !store.indexed_folders.iter().any(|entry| entry == &normalized_path) {
+            store.indexed_folders.push(normalized_path);
+        }
         store.index_state = IndexState::Stale;
         store.last_error = None;
     }
-    persist_store(&store).ok();
-    replace_store(&state, store.clone());
-    to_index_status(&store)
+    persist_store(&store).map_err(|error| error.to_string())?;
+    Ok(to_index_status(&store))
 }
 
 #[tauri::command]
@@ -301,6 +469,8 @@ pub fn remove_index_folder(path: String, state: tauri::State<SearchEngineState>)
 #[tauri::command]
 pub fn start_indexing(state: tauri::State<SearchEngineState>) -> IndexStatus {
     let mut store = load_store(&state);
+    store.ai = fixed_ai_settings();
+    CANCEL_INDEXING.store(false, AtomicOrdering::SeqCst);
     if store.indexed_folders.is_empty() {
         store.index_state = IndexState::NotConfigured;
         store.last_error = Some("Add at least one folder before indexing.".to_string());
@@ -319,8 +489,32 @@ pub fn start_indexing(state: tauri::State<SearchEngineState>) -> IndexStatus {
             return to_index_status(&store);
         }
     };
+    match provider.embed_query("provider readiness check") {
+        Ok(vector) if vector.len() == store.ai.embedding_dimension => {}
+        Ok(vector) => {
+            store.index_state = IndexState::Failed;
+            store.last_error = Some(format!(
+                "Provider returned {} dimensions, expected {}.",
+                vector.len(),
+                store.ai.embedding_dimension
+            ));
+            persist_store(&store).ok();
+            replace_store(&state, store.clone());
+            return to_index_status(&store);
+        }
+        Err(error) => {
+            store.index_state = IndexState::Failed;
+            store.last_error = Some(error);
+            persist_store(&store).ok();
+            replace_store(&state, store.clone());
+            return to_index_status(&store);
+        }
+    }
 
     store.index_state = IndexState::Indexing;
+    store.current_file_path = None;
+    store.errors.clear();
+    store.skipped_file_count = 0;
     replace_store(&state, store.clone());
 
     match rebuild_index(store, provider.as_ref()) {
@@ -333,6 +527,7 @@ pub fn start_indexing(state: tauri::State<SearchEngineState>) -> IndexStatus {
             let mut failed_store = load_store(&state);
             failed_store.index_state = IndexState::Failed;
             failed_store.last_error = Some(error);
+            failed_store.current_file_path = None;
             persist_store(&failed_store).ok();
             replace_store(&state, failed_store.clone());
             to_index_status(&failed_store)
@@ -342,8 +537,9 @@ pub fn start_indexing(state: tauri::State<SearchEngineState>) -> IndexStatus {
 
 #[tauri::command]
 pub fn search_files(query: String, limit: Option<usize>, state: tauri::State<SearchEngineState>) -> SearchFilesResponse {
-    let store = load_store(&state);
-    if store.ai.provider != AiProviderKind::LocalPlaceholder && store.ai.api_key.as_deref().unwrap_or("").trim().is_empty() {
+    let mut store = load_store(&state);
+    store.ai = fixed_ai_settings();
+    if store.ai.api_key.as_deref().unwrap_or("").trim().is_empty() {
         return not_ready("providerUnavailable");
     }
     if store.index_state != IndexState::Ready {
@@ -473,43 +669,109 @@ fn search_with_sqlite_vec(
 
 fn rebuild_index(mut store: AppStore, provider: &dyn EmbeddingProvider) -> Result<AppStore, String> {
     let mut documents = Vec::new();
+    let previous_files: HashMap<String, IndexedFile> = store
+        .files
+        .iter()
+        .map(|file| (file.path.clone(), file.clone()))
+        .collect();
+    let previous_chunks: HashMap<String, Vec<IndexedChunk>> = store
+        .chunks
+        .iter()
+        .cloned()
+        .fold(HashMap::new(), |mut map, chunk| {
+            map.entry(chunk.file_id.clone()).or_default().push(chunk);
+            map
+        });
+    let reuse_allowed = store.active_embedding_signature.as_deref() == Some(embedding_signature(&store.ai).as_str());
+    let mut reused_files = Vec::new();
+    let mut reused_chunks = Vec::new();
     for root in &store.indexed_folders {
         for path in collect_supported_files(Path::new(root)) {
+            if CANCEL_INDEXING.load(AtomicOrdering::SeqCst) {
+                return Err("Indexing canceled.".to_string());
+            }
             let metadata = match fs::metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(_) => continue,
             };
             let file_id = stable_id(path.to_string_lossy().as_ref());
+            let path_string = path.to_string_lossy().to_string();
+            let modified_key = metadata.modified().ok().and_then(system_time_to_secs).unwrap_or(0);
+            let size_bytes = metadata.len();
+            if reuse_allowed {
+                if let Some(previous_file) = previous_files.get(&path_string) {
+                    if previous_file.modified_key == modified_key
+                        && previous_file.size_bytes == Some(size_bytes)
+                        && previous_file.embedding_kind == embedding_signature(&store.ai)
+                    {
+                        reused_files.push(previous_file.clone());
+                        if let Some(chunks) = previous_chunks.get(&previous_file.id) {
+                            reused_chunks.extend(chunks.clone());
+                        }
+                        store.skipped_file_count += 1;
+                        continue;
+                    }
+                }
+            }
             let extracted = extract_file_text(&path, metadata.len());
+            let last_error = match &extracted.status {
+                ExtractionStatus::ExtractionFailed { message } => Some(message.clone()),
+                ExtractionStatus::OcrUnavailable => Some("Image indexed without OCR text.".to_string()),
+                ExtractionStatus::Ready => None,
+            };
+            if let Some(message) = &last_error {
+                store.errors.push(IndexErrorEntry {
+                    file_path: path_string.clone(),
+                    message: message.clone(),
+                });
+            }
             let file = IndexedFile {
                 id: file_id.clone(),
-                path: path.to_string_lossy().to_string(),
+                path: path_string,
                 display_name: path.file_name().and_then(|name| name.to_str()).unwrap_or("").to_string(),
                 file_type: extension(&path),
                 modified_at: None,
-                modified_key: metadata.modified().ok().and_then(system_time_to_secs).unwrap_or(0),
-                size_bytes: Some(metadata.len()),
+                modified_key,
+                size_bytes: Some(size_bytes),
                 extraction_status: extracted.status,
+                indexed_at: system_time_to_secs(SystemTime::now()),
+                chunk_count: 0,
+                embedding_kind: embedding_signature(&store.ai),
+                last_error,
             };
             documents.push(IndexedDocument {
                 file,
-                chunk_texts: chunk_text(&extracted.text),
+                chunks: build_document_chunks(&path, &extracted.text),
             });
         }
     }
 
-    let all_texts: Vec<String> = documents
+    let all_payloads: Vec<EmbeddingPayload> = documents
         .iter()
-        .flat_map(|document| document.chunk_texts.iter().cloned())
+        .flat_map(|document| document.chunks.iter().map(|chunk| clone_payload(&chunk.payload)))
         .collect();
-    let embeddings = provider.embed_documents(&all_texts)?;
+    let embeddings = match provider.embed_payloads(&all_payloads) {
+        Ok(embeddings) => embeddings,
+        Err(primary_error) => {
+            let fallback_payloads: Vec<EmbeddingPayload> = documents
+                .iter()
+                .flat_map(|document| {
+                    document.chunks.iter().map(|chunk| EmbeddingPayload::Text(chunk.text.clone()))
+                })
+                .collect();
+            provider
+                .embed_payloads(&fallback_payloads)
+                .map_err(|fallback_error| format!("{primary_error}; text fallback failed: {fallback_error}"))?
+        }
+    };
 
     let mut files = Vec::new();
     let mut chunks = Vec::new();
     let mut embedding_index = 0;
-    for document in documents {
+    for mut document in documents {
         let file_id = document.file.id.clone();
-        for (chunk_index, text) in document.chunk_texts.into_iter().enumerate() {
+        let chunk_count = document.chunks.len();
+        for (chunk_index, chunk) in document.chunks.into_iter().enumerate() {
             let embedding = embeddings
                 .get(embedding_index)
                 .cloned()
@@ -518,10 +780,11 @@ fn rebuild_index(mut store: AppStore, provider: &dyn EmbeddingProvider) -> Resul
             chunks.push(IndexedChunk {
                     id: format!("{}:{chunk_index}", file_id),
                     file_id: file_id.clone(),
-                    text,
+                    text: chunk.text,
                     embedding,
             });
         }
+        document.file.chunk_count = chunk_count;
         files.push(document.file);
     }
 
@@ -529,11 +792,15 @@ fn rebuild_index(mut store: AppStore, provider: &dyn EmbeddingProvider) -> Resul
         return Err("Provider returned more embeddings than requested.".to_string());
     }
 
-    store.files = files;
-    store.chunks = chunks;
+    reused_files.extend(files);
+    reused_chunks.extend(chunks);
+    store.files = reused_files;
+    store.chunks = reused_chunks;
     store.active_embedding_signature = Some(embedding_signature(&store.ai));
     store.index_state = IndexState::Ready;
     store.last_error = None;
+    store.current_file_path = None;
+    store.last_indexed_at = system_time_to_secs(SystemTime::now());
     Ok(store)
 }
 
@@ -567,13 +834,11 @@ fn extract_file_text(path: &Path, size: u64) -> ExtractedText {
             },
             Ok(_) => ExtractedText {
                 text: fallback_text(path),
-                status: ExtractionStatus::ExtractionFailed {
-                    message: "PDF did not expose extractable text.".to_string(),
-                },
+                status: ExtractionStatus::Ready,
             },
-            Err(error) => ExtractedText {
+            Err(_error) => ExtractedText {
                 text: fallback_text(path),
-                status: ExtractionStatus::ExtractionFailed { message: error },
+                status: ExtractionStatus::Ready,
             },
         };
     }
@@ -596,9 +861,19 @@ fn extract_file_text(path: &Path, size: u64) -> ExtractedText {
         };
     }
     if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
-        return ExtractedText {
-            text: fallback_text(path),
-            status: ExtractionStatus::OcrUnavailable,
+        return match extract_image_ocr_text(path) {
+            Ok(text) if !text.trim().is_empty() => ExtractedText {
+                text: format!("{} {}", fallback_text(path), text),
+                status: ExtractionStatus::Ready,
+            },
+            Ok(_) => ExtractedText {
+                text: fallback_text(path),
+                status: ExtractionStatus::Ready,
+            },
+            Err(_) => ExtractedText {
+                text: fallback_text(path),
+                status: ExtractionStatus::Ready,
+            },
         };
     }
     ExtractedText {
@@ -607,6 +882,48 @@ fn extract_file_text(path: &Path, size: u64) -> ExtractedText {
             message: format!("{ext} text extraction needs parser integration."),
         },
     }
+}
+
+#[cfg(target_os = "windows")]
+fn extract_image_ocr_text(path: &Path) -> Result<String, String> {
+    let script = r#"
+param([string]$Path)
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
+$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
+$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 } | Select-Object -First 1)
+function Await($op) { $asTask.Invoke($null, @($op)).GetAwaiter().GetResult() }
+$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($Path))
+$stream = Await ($file.OpenReadAsync())
+$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream))
+$bitmap = Await ($decoder.GetSoftwareBitmapAsync())
+$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+if ($null -eq $engine) { throw 'Windows OCR engine unavailable.' }
+$result = Await ($engine.RecognizeAsync($bitmap))
+$result.Text
+"#;
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+            path.to_string_lossy().as_ref(),
+        ])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn extract_image_ocr_text(_path: &Path) -> Result<String, String> {
+    Err("Windows OCR is only available in Windows builds.".to_string())
 }
 
 fn extract_pdf_text(path: &Path) -> Result<String, String> {
@@ -665,6 +982,48 @@ fn chunk_text(text: &str) -> Vec<String> {
     chunks
 }
 
+fn build_document_chunks(path: &Path, text: &str) -> Vec<DocumentChunk> {
+    let ext = extension(path);
+    if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "pdf") {
+        if let Ok(bytes) = fs::read(path) {
+            return vec![DocumentChunk {
+                text: fallback_text(path),
+                payload: EmbeddingPayload::InlineData {
+                    mime_type: mime_type_for_extension(&ext).to_string(),
+                    data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+                },
+            }];
+        }
+    }
+    chunk_text(text)
+        .into_iter()
+        .map(|chunk| DocumentChunk {
+            payload: EmbeddingPayload::Text(chunk.clone()),
+            text: chunk,
+        })
+        .collect()
+}
+
+fn clone_payload(payload: &EmbeddingPayload) -> EmbeddingPayload {
+    match payload {
+        EmbeddingPayload::Text(text) => EmbeddingPayload::Text(text.clone()),
+        EmbeddingPayload::InlineData { mime_type, data_base64 } => EmbeddingPayload::InlineData {
+            mime_type: mime_type.clone(),
+            data_base64: data_base64.clone(),
+        },
+    }
+}
+
+fn mime_type_for_extension(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        _ => "text/plain",
+    }
+}
+
 fn collect_supported_files(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     collect_supported_files_into(root, &mut files);
@@ -688,6 +1047,132 @@ fn collect_supported_files_into(root: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
+fn collect_all_files(root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    collect_all_files_into(root, &mut files);
+    files
+}
+
+fn collect_all_files_into(root: &Path, files: &mut Vec<PathBuf>) {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if !is_ignored_dir(&path) {
+                collect_all_files_into(&path, files);
+            }
+        } else {
+            files.push(path);
+        }
+    }
+}
+
+fn collect_file_statuses(store: &AppStore, folders: &[String]) -> Vec<FileIndexStatus> {
+    let mut rows = Vec::new();
+    for root in folders {
+        for path in collect_all_files(Path::new(root)) {
+            rows.push(file_status_for_path(store, &path));
+        }
+    }
+    for file in &store.files {
+        if !Path::new(&file.path).exists()
+            && folders.iter().any(|folder| file.path.starts_with(folder))
+        {
+            rows.push(stored_missing_status(file));
+        }
+    }
+    rows.sort_by(|left, right| left.path.cmp(&right.path));
+    rows
+}
+
+fn file_status_for_path(store: &AppStore, path: &Path) -> FileIndexStatus {
+    let path_string = path.to_string_lossy().to_string();
+    let display_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("").to_string();
+    let ext = extension(path);
+    if !SUPPORTED_EXTENSIONS.contains(&ext.as_str()) {
+        return FileIndexStatus {
+            path: path_string,
+            display_name,
+            file_type: ext,
+            size_bytes: fs::metadata(path).ok().map(|metadata| metadata.len()),
+            modified_at: fs::metadata(path).ok().and_then(|metadata| metadata.modified().ok()).and_then(system_time_to_secs),
+            status: FileIndexState::Unsupported,
+            reason: Some("Unsupported file type.".to_string()),
+            indexed_at: None,
+            chunk_count: 0,
+        };
+    }
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return FileIndexStatus {
+                path: path_string,
+                display_name,
+                file_type: ext,
+                size_bytes: None,
+                modified_at: None,
+                status: FileIndexState::Missing,
+                reason: Some(error.to_string()),
+                indexed_at: None,
+                chunk_count: 0,
+            };
+        }
+    };
+    let modified_key = metadata.modified().ok().and_then(system_time_to_secs).unwrap_or(0);
+    let indexed = store.files.iter().find(|file| file.path == path_string);
+    if let Some(file) = indexed {
+        let same_fingerprint = file.modified_key == modified_key && file.size_bytes == Some(metadata.len());
+        let state = if !same_fingerprint {
+            FileIndexState::Changed
+        } else {
+            match file.extraction_status {
+                ExtractionStatus::Ready => FileIndexState::Indexed,
+                ExtractionStatus::OcrUnavailable => FileIndexState::Partial,
+                ExtractionStatus::ExtractionFailed { .. } => FileIndexState::Failed,
+            }
+        };
+        return FileIndexStatus {
+            path: path_string,
+            display_name,
+            file_type: ext,
+            size_bytes: Some(metadata.len()),
+            modified_at: Some(modified_key),
+            status: state,
+            reason: file.last_error.clone(),
+            indexed_at: file.indexed_at,
+            chunk_count: file.chunk_count,
+        };
+    }
+    FileIndexStatus {
+        path: path_string,
+        display_name,
+        file_type: ext,
+        size_bytes: Some(metadata.len()),
+        modified_at: Some(modified_key),
+        status: FileIndexState::New,
+        reason: None,
+        indexed_at: None,
+        chunk_count: 0,
+    }
+}
+
+fn stored_missing_status(file: &IndexedFile) -> FileIndexStatus {
+    FileIndexStatus {
+        path: file.path.clone(),
+        display_name: file.display_name.clone(),
+        file_type: file.file_type.clone(),
+        size_bytes: file.size_bytes,
+        modified_at: Some(file.modified_key),
+        status: FileIndexState::Missing,
+        reason: Some("File no longer exists on disk.".to_string()),
+        indexed_at: file.indexed_at,
+        chunk_count: file.chunk_count,
+    }
+}
+
 fn is_ignored_dir(path: &Path) -> bool {
     let name = path.file_name().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
     matches!(name.as_str(), "node_modules" | ".git" | "target" | "dist" | "appdata" | "windows")
@@ -696,11 +1181,14 @@ fn is_ignored_dir(path: &Path) -> bool {
 trait EmbeddingProvider {
     fn embed_query(&self, text: &str) -> Result<Vec<f32>, String>;
     fn embed_document(&self, text: &str) -> Result<Vec<f32>, String>;
-    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
-        texts
-            .iter()
-            .map(|text| self.embed_document(text))
-            .collect()
+    fn embed_payload(&self, payload: &EmbeddingPayload) -> Result<Vec<f32>, String> {
+        match payload {
+            EmbeddingPayload::Text(text) => self.embed_document(text),
+            EmbeddingPayload::InlineData { .. } => Err("Inline embeddings are not supported by this provider.".to_string()),
+        }
+    }
+    fn embed_payloads(&self, payloads: &[EmbeddingPayload]) -> Result<Vec<Vec<f32>>, String> {
+        payloads.iter().map(|payload| self.embed_payload(payload)).collect()
     }
 }
 
@@ -719,6 +1207,89 @@ fn create_provider(settings: &AiSettings) -> Result<Box<dyn EmbeddingProvider>, 
     }))
 }
 
+fn fixed_ai_settings() -> AiSettings {
+    AiSettings {
+        provider: AiProviderKind::GoogleGemini,
+        endpoint: FIXED_GEMINI_ENDPOINT.to_string(),
+        model: FIXED_GEMINI_MODEL.to_string(),
+        embedding_dimension: FIXED_GEMINI_DIMENSIONS,
+        api_key: load_secret("GEMINI_API_KEY"),
+    }
+}
+
+fn load_secret(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| read_dotenv_value(name))
+}
+
+fn read_dotenv_value(name: &str) -> Option<String> {
+    let candidates = [
+        PathBuf::from(".env"),
+        PathBuf::from("../.env"),
+        PathBuf::from("../../.env"),
+    ];
+    for path in candidates {
+        let Ok(contents) = fs::read_to_string(path) else {
+            continue;
+        };
+        for line in contents.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            let Some((key, value)) = trimmed.split_once('=') else {
+                continue;
+            };
+            if key.trim() == name {
+                let cleaned = value.trim().trim_matches('"').trim_matches('\'').to_string();
+                if !cleaned.is_empty() {
+                    return Some(cleaned);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn settings_with_stored_key(mut settings: AiSettings) -> Result<AiSettings, String> {
+    if settings.provider != AiProviderKind::LocalPlaceholder
+        && settings.api_key.as_deref().unwrap_or("").trim().is_empty()
+    {
+        settings.api_key = Some(read_api_key(&settings.provider)?);
+    }
+    Ok(settings)
+}
+
+fn credential_user(provider: &AiProviderKind) -> String {
+    format!("embedding-api-key-{}", provider_to_str(provider))
+}
+
+fn read_api_key(provider: &AiProviderKind) -> Result<String, String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &credential_user(provider))
+        .map_err(|error| format!("Credential Manager unavailable: {error}"))?;
+    entry
+        .get_password()
+        .map_err(|error| format!("API key not found in Credential Manager: {error}"))
+}
+
+fn write_api_key(provider: &AiProviderKind, api_key: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &credential_user(provider))
+        .map_err(|error| format!("Credential Manager unavailable: {error}"))?;
+    entry
+        .set_password(api_key)
+        .map_err(|error| format!("Could not save API key in Credential Manager: {error}"))
+}
+
+fn delete_api_key(provider: &AiProviderKind) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &credential_user(provider))
+        .map_err(|error| format!("Credential Manager unavailable: {error}"))?;
+    entry
+        .delete_credential()
+        .map_err(|error| format!("Could not clear API key from Credential Manager: {error}"))
+}
+
 struct LocalPlaceholderProvider {
     dimensions: usize,
 }
@@ -730,6 +1301,15 @@ impl EmbeddingProvider for LocalPlaceholderProvider {
 
     fn embed_document(&self, text: &str) -> Result<Vec<f32>, String> {
         Ok(hash_embedding(text, self.dimensions))
+    }
+
+    fn embed_payload(&self, payload: &EmbeddingPayload) -> Result<Vec<f32>, String> {
+        match payload {
+            EmbeddingPayload::Text(text) => Ok(hash_embedding(text, self.dimensions)),
+            EmbeddingPayload::InlineData { mime_type, data_base64 } => {
+                Ok(hash_embedding(&format!("{mime_type}:{data_base64}"), self.dimensions))
+            }
+        }
     }
 }
 
@@ -747,17 +1327,17 @@ impl EmbeddingProvider for HttpEmbeddingProvider {
         self.validate_embedding(self.embed(text)?)
     }
 
-    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
-        let vectors = match self.settings.provider {
-            AiProviderKind::OpenAiCompatible => self.embed_openai_batch(texts),
-            AiProviderKind::Ollama => self.embed_ollama_batch(texts),
-            _ => texts.iter().map(|text| self.embed(text)).collect(),
-        }?;
+    fn embed_payload(&self, payload: &EmbeddingPayload) -> Result<Vec<f32>, String> {
+        match payload {
+            EmbeddingPayload::Text(text) => self.validate_embedding(self.embed(text)?),
+            EmbeddingPayload::InlineData { mime_type, data_base64 } => {
+                self.validate_embedding(self.embed_gemini_inline(mime_type, data_base64)?)
+            }
+        }
+    }
 
-        vectors
-            .into_iter()
-            .map(|vector| self.validate_embedding(vector))
-            .collect()
+    fn embed_payloads(&self, payloads: &[EmbeddingPayload]) -> Result<Vec<Vec<f32>>, String> {
+        payloads.iter().map(|payload| self.embed_payload(payload)).collect()
     }
 }
 
@@ -794,7 +1374,33 @@ impl HttpEmbeddingProvider {
             self.settings.api_key.as_deref().unwrap_or("")
         );
         let body = serde_json::json!({
+            "outputDimensionality": self.settings.embedding_dimension,
             "content": { "parts": [{ "text": text }] }
+        });
+        let value: serde_json::Value = self.post_json(&endpoint, body)?;
+        parse_number_array(&value["embedding"]["values"])
+    }
+
+    fn embed_gemini_inline(&self, mime_type: &str, data_base64: &str) -> Result<Vec<f32>, String> {
+        if self.settings.provider != AiProviderKind::GoogleGemini {
+            return Err("Inline file embeddings require Gemini Embedding 2.".to_string());
+        }
+        let endpoint = format!(
+            "{}/models/{}:embedContent?key={}",
+            self.settings.endpoint.trim_end_matches('/'),
+            self.settings.model,
+            self.settings.api_key.as_deref().unwrap_or("")
+        );
+        let body = serde_json::json!({
+            "outputDimensionality": self.settings.embedding_dimension,
+            "content": {
+                "parts": [{
+                    "inlineData": {
+                        "mimeType": mime_type,
+                        "data": data_base64
+                    }
+                }]
+            }
         });
         let value: serde_json::Value = self.post_json(&endpoint, body)?;
         parse_number_array(&value["embedding"]["values"])
@@ -1045,6 +1651,11 @@ fn to_index_status(store: &AppStore) -> IndexStatus {
         indexed_chunk_count: store.chunks.len(),
         last_error: store.last_error.clone(),
         message,
+        current_file_path: store.current_file_path.clone(),
+        failed_file_count: store.errors.len(),
+        skipped_file_count: store.skipped_file_count,
+        can_cancel: store.index_state == IndexState::Indexing,
+        last_indexed_at: store.last_indexed_at,
     }
 }
 
@@ -1068,7 +1679,9 @@ fn mask_secret(secret: &str) -> String {
 
 fn load_store(state: &tauri::State<SearchEngineState>) -> AppStore {
     let _guard = state.db_lock.lock().expect("search store mutex poisoned");
-    load_store_from_sqlite().unwrap_or_default()
+    let mut store = load_store_from_sqlite().unwrap_or_default();
+    store.ai = fixed_ai_settings();
+    store
 }
 
 fn replace_store(state: &tauri::State<SearchEngineState>, store: AppStore) {
@@ -1110,7 +1723,14 @@ fn migrate_db(connection: &Connection) -> Result<(), String> {
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 state TEXT NOT NULL,
                 active_embedding_signature TEXT,
-                last_error TEXT
+                last_error TEXT,
+                current_file_path TEXT,
+                skipped_file_count INTEGER NOT NULL DEFAULT 0,
+                last_indexed_at INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS indexing_errors (
+                file_path TEXT NOT NULL,
+                message TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS indexed_roots (
                 path TEXT PRIMARY KEY
@@ -1123,7 +1743,11 @@ fn migrate_db(connection: &Connection) -> Result<(), String> {
                 modified_at TEXT,
                 modified_key INTEGER NOT NULL,
                 size_bytes INTEGER,
-                extraction_status_json TEXT NOT NULL
+                extraction_status_json TEXT NOT NULL,
+                indexed_at INTEGER,
+                chunk_count INTEGER NOT NULL DEFAULT 0,
+                embedding_kind TEXT NOT NULL DEFAULT '',
+                last_error TEXT
             );
             CREATE TABLE IF NOT EXISTS indexed_chunks (
                 id TEXT PRIMARY KEY,
@@ -1135,7 +1759,19 @@ fn migrate_db(connection: &Connection) -> Result<(), String> {
             CREATE INDEX IF NOT EXISTS idx_indexed_chunks_file_id ON indexed_chunks(file_id);
             ",
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    for statement in [
+        "ALTER TABLE index_meta ADD COLUMN current_file_path TEXT",
+        "ALTER TABLE index_meta ADD COLUMN skipped_file_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE index_meta ADD COLUMN last_indexed_at INTEGER",
+        "ALTER TABLE indexed_files ADD COLUMN indexed_at INTEGER",
+        "ALTER TABLE indexed_files ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE indexed_files ADD COLUMN embedding_kind TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE indexed_files ADD COLUMN last_error TEXT",
+    ] {
+        let _ = connection.execute(statement, []);
+    }
+    Ok(())
 }
 
 fn load_store_from_sqlite() -> Result<AppStore, String> {
@@ -1143,34 +1779,47 @@ fn load_store_from_sqlite() -> Result<AppStore, String> {
     let mut store = AppStore::default();
 
     if let Ok(settings) = connection.query_row(
-        "SELECT provider, endpoint, model, embedding_dimension, api_key FROM ai_settings WHERE id = 1",
+        "SELECT provider, endpoint, model, embedding_dimension FROM ai_settings WHERE id = 1",
         [],
         |row| {
+            let provider = parse_provider(row.get::<_, String>(0)?.as_str());
+            let api_key = read_api_key(&provider).ok();
             Ok(AiSettings {
-                provider: parse_provider(row.get::<_, String>(0)?.as_str()),
+                provider,
                 endpoint: row.get(1)?,
                 model: row.get(2)?,
                 embedding_dimension: row.get::<_, i64>(3)? as usize,
-                api_key: row.get(4)?,
+                api_key,
             })
         },
     ) {
         store.ai = settings;
     }
 
-    if let Ok((state, signature, last_error)) = connection.query_row(
-        "SELECT state, active_embedding_signature, last_error FROM index_meta WHERE id = 1",
+    if let Ok((state, signature, last_error, current_file_path, skipped_file_count, last_indexed_at)) = connection.query_row(
+        "SELECT state, active_embedding_signature, last_error, current_file_path, skipped_file_count, last_indexed_at FROM index_meta WHERE id = 1",
         [],
-        |row| Ok((row.get::<_, String>(0)?, row.get(1)?, row.get(2)?)),
+        |row| Ok((
+            row.get::<_, String>(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, Option<i64>>(5)?,
+        )),
     ) {
         store.index_state = parse_index_state(&state);
         store.active_embedding_signature = signature;
         store.last_error = last_error;
+        store.current_file_path = current_file_path;
+        store.skipped_file_count = skipped_file_count as usize;
+        store.last_indexed_at = last_indexed_at.map(|value| value as u64);
     }
 
     store.indexed_folders = query_strings(&connection, "SELECT path FROM indexed_roots ORDER BY path")?;
     store.files = query_files(&connection)?;
     store.chunks = query_chunks(&connection)?;
+    store.errors = query_errors(&connection)?;
     Ok(store)
 }
 
@@ -1180,38 +1829,51 @@ fn persist_store_to_sqlite(store: &AppStore) -> Result<(), String> {
     let tx = connection.transaction().map_err(|error| error.to_string())?;
     tx.execute(
         "INSERT INTO ai_settings (id, provider, endpoint, model, embedding_dimension, api_key)
-         VALUES (1, ?1, ?2, ?3, ?4, ?5)
+         VALUES (1, ?1, ?2, ?3, ?4, NULL)
          ON CONFLICT(id) DO UPDATE SET
             provider = excluded.provider,
             endpoint = excluded.endpoint,
             model = excluded.model,
             embedding_dimension = excluded.embedding_dimension,
-            api_key = excluded.api_key",
+            api_key = NULL",
         params![
             provider_to_str(&store.ai.provider),
             store.ai.endpoint,
             store.ai.model,
-            store.ai.embedding_dimension as i64,
-            store.ai.api_key
+            store.ai.embedding_dimension as i64
         ],
     )
     .map_err(|error| error.to_string())?;
     tx.execute(
-        "INSERT INTO index_meta (id, state, active_embedding_signature, last_error)
-         VALUES (1, ?1, ?2, ?3)
+        "INSERT INTO index_meta (id, state, active_embedding_signature, last_error, current_file_path, skipped_file_count, last_indexed_at)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(id) DO UPDATE SET
             state = excluded.state,
             active_embedding_signature = excluded.active_embedding_signature,
-            last_error = excluded.last_error",
+            last_error = excluded.last_error,
+            current_file_path = excluded.current_file_path,
+            skipped_file_count = excluded.skipped_file_count,
+            last_indexed_at = excluded.last_indexed_at",
         params![
             index_state_to_str(&store.index_state),
             store.active_embedding_signature,
-            store.last_error
+            store.last_error,
+            store.current_file_path,
+            store.skipped_file_count as i64,
+            store.last_indexed_at.map(|value| value as i64)
         ],
     )
     .map_err(|error| error.to_string())?;
 
     tx.execute("DELETE FROM indexed_roots", []).map_err(|error| error.to_string())?;
+    tx.execute("DELETE FROM indexing_errors", []).map_err(|error| error.to_string())?;
+    for error in &store.errors {
+        tx.execute(
+            "INSERT INTO indexing_errors (file_path, message) VALUES (?1, ?2)",
+            params![error.file_path, error.message],
+        )
+        .map_err(|error| error.to_string())?;
+    }
     for folder in &store.indexed_folders {
         tx.execute("INSERT INTO indexed_roots (path) VALUES (?1)", params![folder])
             .map_err(|error| error.to_string())?;
@@ -1222,8 +1884,8 @@ fn persist_store_to_sqlite(store: &AppStore) -> Result<(), String> {
     for file in &store.files {
         tx.execute(
             "INSERT INTO indexed_files
-             (id, path, display_name, file_type, modified_at, modified_key, size_bytes, extraction_status_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (id, path, display_name, file_type, modified_at, modified_key, size_bytes, extraction_status_json, indexed_at, chunk_count, embedding_kind, last_error)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 file.id,
                 file.path,
@@ -1232,7 +1894,11 @@ fn persist_store_to_sqlite(store: &AppStore) -> Result<(), String> {
                 file.modified_at,
                 file.modified_key as i64,
                 file.size_bytes.map(|value| value as i64),
-                serde_json::to_string(&file.extraction_status).map_err(|error| error.to_string())?
+                serde_json::to_string(&file.extraction_status).map_err(|error| error.to_string())?,
+                file.indexed_at.map(|value| value as i64),
+                file.chunk_count as i64,
+                file.embedding_kind,
+                file.last_error
             ],
         )
         .map_err(|error| error.to_string())?;
@@ -1284,7 +1950,7 @@ fn query_strings(connection: &Connection, sql: &str) -> Result<Vec<String>, Stri
 fn query_files(connection: &Connection) -> Result<Vec<IndexedFile>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT id, path, display_name, file_type, modified_at, modified_key, size_bytes, extraction_status_json
+            "SELECT id, path, display_name, file_type, modified_at, modified_key, size_bytes, extraction_status_json, indexed_at, chunk_count, embedding_kind, last_error
              FROM indexed_files ORDER BY path",
         )
         .map_err(|error| error.to_string())?;
@@ -1304,6 +1970,10 @@ fn query_files(connection: &Connection) -> Result<Vec<IndexedFile>, String> {
                         message: "Stored extraction status was invalid.".to_string(),
                     }
                 }),
+                indexed_at: row.get::<_, Option<i64>>(8)?.map(|value| value as u64),
+                chunk_count: row.get::<_, i64>(9)? as usize,
+                embedding_kind: row.get(10)?,
+                last_error: row.get(11)?,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -1322,6 +1992,21 @@ fn query_chunks(connection: &Connection) -> Result<Vec<IndexedChunk>, String> {
                 file_id: row.get(1)?,
                 text: row.get(2)?,
                 embedding: serde_json::from_str(&embedding_json).unwrap_or_default(),
+            })
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
+}
+
+fn query_errors(connection: &Connection) -> Result<Vec<IndexErrorEntry>, String> {
+    let mut statement = connection
+        .prepare("SELECT file_path, message FROM indexing_errors ORDER BY rowid")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(IndexErrorEntry {
+                file_path: row.get(0)?,
+                message: row.get(1)?,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -1395,4 +2080,80 @@ fn embedding_signature(settings: &AiSettings) -> String {
 
 fn system_time_to_secs(time: SystemTime) -> Option<u64> {
     time.duration_since(UNIX_EPOCH).ok().map(|duration| duration.as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_extraction_falls_back_to_direct_embedding_text() {
+        let extracted = extract_file_text(Path::new("C:\\Docs\\receipt.png"), 128);
+
+        assert!(matches!(extracted.status, ExtractionStatus::Ready));
+        assert!(extracted.text.contains("receipt.png"));
+    }
+
+    #[test]
+    fn stored_missing_status_marks_deleted_file_missing() {
+        let file = IndexedFile {
+            id: "id".to_string(),
+            path: "C:\\Docs\\old.txt".to_string(),
+            display_name: "old.txt".to_string(),
+            file_type: "txt".to_string(),
+            modified_at: None,
+            modified_key: 1,
+            size_bytes: Some(10),
+            extraction_status: ExtractionStatus::Ready,
+            indexed_at: Some(2),
+            chunk_count: 1,
+            embedding_kind: "sig".to_string(),
+            last_error: None,
+        };
+        let status = stored_missing_status(&file);
+
+        assert_eq!(status.status, FileIndexState::Missing);
+    }
+
+    #[test]
+    fn local_placeholder_embeddings_match_configured_dimension() {
+        let provider = LocalPlaceholderProvider { dimensions: 32 };
+        let embedding = provider.embed_query("marketing analysis final report").unwrap();
+
+        assert_eq!(embedding.len(), 32);
+        assert!(embedding.iter().any(|value| *value > 0.0));
+    }
+
+    #[test]
+    fn provider_names_round_trip_for_storage() {
+        for provider in [
+            AiProviderKind::GoogleGemini,
+            AiProviderKind::HuggingFace,
+            AiProviderKind::OpenAiCompatible,
+            AiProviderKind::Ollama,
+            AiProviderKind::LocalPlaceholder,
+        ] {
+            assert_eq!(parse_provider(provider_to_str(&provider)), provider);
+        }
+    }
+
+    #[test]
+    fn indexed_roots_persist_and_reload() {
+        let test_home = std::env::temp_dir().join(format!(
+            "browhere-test-home-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&test_home).unwrap();
+        std::env::set_var("HOME", &test_home);
+
+        let mut store = AppStore::default();
+        store.indexed_folders = vec![test_home.to_string_lossy().to_string()];
+        store.index_state = IndexState::Stale;
+
+        persist_store_to_sqlite(&store).unwrap();
+        let loaded = load_store_from_sqlite().unwrap();
+
+        assert_eq!(loaded.indexed_folders, store.indexed_folders);
+        assert_eq!(loaded.index_state, IndexState::Stale);
+    }
 }
