@@ -1,8 +1,11 @@
 node_modules
-.codex
+.next
 dist/
 .env
+.env.local
+!.env.local.example
 *.log
 ERROR.md
 coverage
 src-tauri/target
+.browhere
