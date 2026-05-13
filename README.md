@@ -14,7 +14,7 @@ The current app supports text, Markdown, PDF, DOCX, PNG, JPG, and JPEG files.
 - Generate Gemini embeddings for text, documents, images, image labels, and metadata context.
 - Store embeddings, chunks, file records, and metadata locally in LanceDB.
 - Use Groq for bounded query planning and result reranking when configured.
-- Show index status, failures, partial results, and search matches in the Next.js UI.
+- Show index status, failed/partial counts, repair activity, and search matches in the Next.js UI.
 
 ## Tech Stack
 

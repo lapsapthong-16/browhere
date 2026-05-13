@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "LANCEDB_LOG=lance::dataset::scanner=error next dev",
     "build": "next build",
-    "start": "next start",
-    "test": "vitest run",
+    "start": "LANCEDB_LOG=lance::dataset::scanner=error next start",
+    "test": "LANCEDB_LOG=lance::dataset::scanner=error vitest run",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit"
   },

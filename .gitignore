@@ -9,3 +9,4 @@ ERROR.md
 coverage
 src-tauri/target
 .browhere
+tsconfig.tsbuildinfo

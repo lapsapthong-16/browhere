@@ -1,8 +1,14 @@
-export type IndexState = "notConfigured" | "ready" | "indexing" | "stale" | "failed";
-export type FileStatus = "indexed" | "new" | "changed" | "missing" | "failed" | "partial" | "unsupported";
+export type IndexState = "notConfigured" | "ready" | "indexing" | "failed";
+export type FileStatus = "indexed" | "failed" | "partial";
 export type RecordKind = "text" | "rawImage" | "imageLabel" | "metadata";
 export type ContextSource = "extractedText" | "rawImageVector" | "imageLabel" | "metadata";
-export type MatchKind = ContextSource | "explanation";
+export type MatchKind = ContextSource | "filenamePath" | "unconfirmedVisual" | "explanation";
+export type RepairOperation =
+  | "rawImageEmbedding"
+  | "imageLabel"
+  | "metadataEmbedding";
+export type RepairTaskStatus = "queued" | "running" | "cooldown";
+export type RepairErrorKind = "quota" | "providerUnavailable" | "transient";
 
 export interface FileMetadata {
   displayName: string;
@@ -38,7 +44,7 @@ export interface IndexedFileRecord {
   chunkCount: number;
   metadata?: FileMetadata;
   metadataContext?: string;
-  labelStatus?: "notApplicable" | "generated" | "failed";
+  labelStatus?: "notApplicable" | "generated" | "failed" | "pending";
   labelReason?: string;
 }
 
@@ -64,10 +70,31 @@ export interface ChunkRecord {
   model?: string;
 }
 
-export interface IndexFailure {
+export interface RepairTask {
+  id: string;
+  fileId: string;
   filePath: string;
-  message: string;
-  at: number;
+  contentMarker: string;
+  operation: RepairOperation;
+  status: RepairTaskStatus;
+  retryCount: number;
+  lastAttemptAt?: number;
+  nextRetryAt?: number;
+  lastError?: string;
+  errorKind?: RepairErrorKind;
+}
+
+export interface IndexedDocumentLog {
+  id: string;
+  displayName: string;
+  filePath: string;
+  folderPath: string;
+  fileType: string;
+  indexedAt: number;
+  chunkCount: number;
+  status: FileStatus;
+  labelStatus?: IndexedFileRecord["labelStatus"];
+  labelEmbedded?: boolean;
 }
 
 export interface IndexStatus {
@@ -83,7 +110,13 @@ export interface IndexStatus {
   unsupportedCount: number;
   currentFilePath?: string;
   lastIndexedAt?: number;
-  failures: IndexFailure[];
+  documents: IndexedDocumentLog[];
+  repair: {
+    queuedCount: number;
+    cooldownCount: number;
+    runningCount: number;
+    nextRetryAt?: number;
+  };
   message: string;
   providers: {
     geminiReady: boolean;

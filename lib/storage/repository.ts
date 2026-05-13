@@ -8,7 +8,8 @@ import type {
   FileMetadata,
   IndexedFileRecord,
   IndexedFolder,
-  IndexFailure,
+  IndexedDocumentLog,
+  RepairTask,
   RecordKind,
 } from "@/lib/types";
 
@@ -21,7 +22,9 @@ const CHUNK_STRING_COLUMNS = ["recordKind", "contextSource", "metadata", "metada
 interface Metadata {
   schemaVersion: number;
   folders: IndexedFolder[];
-  failures: IndexFailure[];
+  documents: IndexedDocumentLog[];
+  repairTasks: RepairTask[];
+  documentLogInitialized: boolean;
   skippedCount: number;
   unsupportedCount: number;
   lastIndexedAt?: number;
@@ -30,7 +33,9 @@ interface Metadata {
 const DEFAULT_METADATA: Metadata = {
   schemaVersion: 1,
   folders: [],
-  failures: [],
+  documents: [],
+  repairTasks: [],
+  documentLogInitialized: false,
   skippedCount: 0,
   unsupportedCount: 0,
 };
@@ -150,7 +155,9 @@ export class IndexRepository {
     await this.pruneUnapprovedRecords();
     const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
     if (!table) return [];
-    const rows = (await table.search(vector).limit(limit).toArray()) as Array<ChunkRecord & { _distance?: number }>;
+    const rows = (await table.search(vector).limit(limit).toArray()) as Array<
+      ChunkRecord & { _distance?: number }
+    >;
     return rows.map((row) => ({
       ...normalizeChunkRecord(row),
       score: typeof row._distance === "number" ? 1 / (1 + row._distance) : 0,
@@ -170,15 +177,36 @@ export class IndexRepository {
       partial: files.filter((file) => file.status === "partial").length,
       skipped: metadata.skippedCount,
       unsupported: metadata.unsupportedCount,
-      failures: metadata.failures,
       lastIndexedAt: metadata.lastIndexedAt,
     };
   }
 
   async recordFailure(filePath: string, message: string) {
     const metadata = await this.readMetadata();
-    metadata.failures.unshift({ filePath, message, at: Date.now() });
-    metadata.failures = metadata.failures.slice(0, 50);
+    const approved = metadata.repairTasks.filter((task) =>
+      metadata.folders.some((folder) => isWithinFolder(task.filePath, folder.path)),
+    );
+    if (approved.length !== metadata.repairTasks.length) {
+      metadata.repairTasks = approved;
+      await this.writeMetadata(metadata);
+    }
+    return approved;
+  }
+
+  async upsertRepairTask(task: RepairTask) {
+    const metadata = await this.readMetadata();
+    metadata.repairTasks = [
+      task,
+      ...metadata.repairTasks.filter((existing) => existing.id !== task.id),
+    ].sort((left, right) => (left.nextRetryAt ?? 0) - (right.nextRetryAt ?? 0));
+    await this.writeMetadata(metadata);
+  }
+
+  async completeRepairTask(taskId: string) {
+    const metadata = await this.readMetadata();
+    const nextTasks = metadata.repairTasks.filter((task) => task.id !== taskId);
+    if (nextTasks.length === metadata.repairTasks.length) return;
+    metadata.repairTasks = nextTasks;
     await this.writeMetadata(metadata);
   }
 
@@ -193,6 +221,113 @@ export class IndexRepository {
     const metadata = await this.readMetadata();
     metadata.lastIndexedAt = value;
     await this.writeMetadata(metadata);
+  }
+
+  private async recordDocument(file: IndexedFileRecord) {
+    const metadata = await this.readMetadata();
+    const folders = metadata.folders;
+    const folderPath =
+      file.metadata?.approvedFolderRoot ??
+      folders.find((folder) => isWithinFolder(file.path, folder.path))?.path ??
+      path.dirname(file.path);
+    const document: IndexedDocumentLog = {
+      id: file.id,
+      displayName: file.displayName,
+      filePath: file.path,
+      folderPath,
+      fileType: file.fileType,
+      indexedAt: file.indexedAt ?? Date.now(),
+      chunkCount: file.chunkCount,
+      status: file.status,
+      labelStatus: file.labelStatus,
+      labelEmbedded: file.labelStatus === "generated",
+    };
+    metadata.documents = [
+      document,
+      ...metadata.documents.filter((existing) => existing.id !== file.id && existing.filePath !== file.path),
+    ].sort((left, right) => right.indexedAt - left.indexedAt);
+    metadata.documentLogInitialized = true;
+    await this.writeMetadata(metadata);
+  }
+
+  private async deleteDocumentLog(fileId: string) {
+    const metadata = await this.readMetadata();
+    const nextDocuments = metadata.documents.filter((document) => document.id !== fileId);
+    if (nextDocuments.length === metadata.documents.length) return;
+    metadata.documents = nextDocuments;
+    await this.writeMetadata(metadata);
+  }
+
+  private async updateDocumentChunkCount(fileId: string, chunkCount: number) {
+    const metadata = await this.readMetadata();
+    const document = metadata.documents.find((entry) => entry.id === fileId);
+    if (!document || document.chunkCount === chunkCount) return;
+    document.chunkCount = chunkCount;
+    await this.writeMetadata(metadata);
+  }
+
+  private async countChunksForFile(fileId: string): Promise<number> {
+    const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
+    if (!table) return 0;
+    const rows = (await table.query().limit(100_000).toArray()) as ChunkRecord[];
+    return rows.filter((row) => row.fileId === fileId).length;
+  }
+
+  private async deleteRepairTasksForFile(fileId: string) {
+    const metadata = await this.readMetadata();
+    const nextTasks = metadata.repairTasks.filter((task) => task.fileId !== fileId);
+    if (nextTasks.length === metadata.repairTasks.length) return;
+    metadata.repairTasks = nextTasks;
+    await this.writeMetadata(metadata);
+  }
+
+  private async getApprovedDocumentLogs(metadata: Metadata): Promise<IndexedDocumentLog[]> {
+    if (metadata.documentLogInitialized) {
+      return this.enrichDocumentLogs(metadata);
+    }
+
+    const files = await this.getFiles();
+    metadata.documents = files
+      .filter((file) => file.status === "indexed" || file.status === "partial" || file.status === "failed")
+      .map((file) => documentLogFor(file, metadata.folders))
+      .sort((left, right) => right.indexedAt - left.indexedAt);
+    metadata.documentLogInitialized = true;
+    await this.writeMetadata(metadata);
+    return this.pruneDocumentLogs(metadata);
+  }
+
+  private async enrichDocumentLogs(metadata: Metadata): Promise<IndexedDocumentLog[]> {
+    let changed = false;
+    const byId = new Map((await this.getFiles()).map((file) => [file.id, file]));
+    metadata.documents = metadata.documents.map((document) => {
+      const file = byId.get(document.id);
+      if (!file) return document;
+      const next = documentLogFor(file, metadata.folders);
+      next.chunkCount = document.chunkCount;
+      const needsUpdate =
+        document.fileType !== next.fileType ||
+        document.labelStatus !== next.labelStatus ||
+        document.labelEmbedded !== next.labelEmbedded ||
+        document.chunkCount !== next.chunkCount ||
+        document.status !== next.status;
+      if (needsUpdate) changed = true;
+      return needsUpdate ? next : document;
+    });
+    if (changed) {
+      await this.writeMetadata(metadata);
+    }
+    return this.pruneDocumentLogs(metadata);
+  }
+
+  private async pruneDocumentLogs(metadata: Metadata): Promise<IndexedDocumentLog[]> {
+    const approved = metadata.documents.filter((document) =>
+      metadata.folders.some((folder) => isWithinFolder(document.filePath, folder.path)),
+    );
+    if (approved.length !== metadata.documents.length) {
+      metadata.documents = approved;
+      await this.writeMetadata(metadata);
+    }
+    return approved;
   }
 
   async pruneUnapprovedRecords() {
@@ -247,7 +382,6 @@ export class IndexRepository {
       delete(predicate: string): Promise<void>;
       query(): { limit(count: number): { toArray(): Promise<unknown[]> } };
       search(vector: number[]): { limit(count: number): { toArray(): Promise<unknown[]> } };
-      countRows(): Promise<number>;
       schema(): Promise<{ fields: Array<{ name: string }> }>;
       addColumns(columns: Array<{ name: string; valueSql: string }>): Promise<unknown>;
     }>;
@@ -277,7 +411,14 @@ export class IndexRepository {
     const filePath = path.join(this.indexDir, META_FILE);
     try {
       const text = await fs.readFile(filePath, "utf8");
-      return { ...DEFAULT_METADATA, ...JSON.parse(text) };
+      const metadata = {
+        ...DEFAULT_METADATA,
+        ...JSON.parse(text),
+        schemaVersion: DEFAULT_METADATA.schemaVersion,
+      };
+      metadata.repairTasks = normalizeRepairTasks(metadata.repairTasks);
+      await this.writeMetadata(metadata);
+      return metadata;
     } catch {
       await this.writeMetadata(DEFAULT_METADATA);
       return { ...DEFAULT_METADATA };
@@ -338,7 +479,10 @@ function normalizeFileRecord(row: IndexedFileRecord): IndexedFileRecord {
     metadata: parseMetadata(row.metadata),
     metadataContext: row.metadataContext ?? "",
     labelStatus:
-      row.labelStatus === "notApplicable" || row.labelStatus === "generated" || row.labelStatus === "failed"
+      row.labelStatus === "notApplicable" ||
+      row.labelStatus === "generated" ||
+      row.labelStatus === "failed" ||
+      row.labelStatus === "pending"
         ? row.labelStatus
         : undefined,
     labelReason: row.labelReason || undefined,
@@ -383,6 +527,53 @@ function normalizeContextSource(value: unknown, recordKind: RecordKind): Context
   if (recordKind === "imageLabel") return "imageLabel";
   if (recordKind === "metadata") return "metadata";
   return "extractedText";
+}
+
+function documentLogFor(file: IndexedFileRecord, folders: IndexedFolder[]): IndexedDocumentLog {
+  return {
+    id: file.id,
+    displayName: file.displayName,
+    filePath: file.path,
+    folderPath:
+      file.metadata?.approvedFolderRoot ??
+      folders.find((folder) => isWithinFolder(file.path, folder.path))?.path ??
+      path.dirname(file.path),
+    fileType: file.fileType,
+    indexedAt: file.indexedAt ?? file.metadata?.indexedAt ?? Date.now(),
+    chunkCount: file.chunkCount,
+    status: file.status,
+    labelStatus: file.labelStatus,
+    labelEmbedded: file.labelStatus === "generated",
+  };
+}
+
+function normalizeRepairTasks(value: unknown): RepairTask[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((task): task is RepairTask => {
+    if (!task || typeof task !== "object") return false;
+    const record = task as Partial<RepairTask>;
+    return (
+      typeof record.id === "string" &&
+      typeof record.fileId === "string" &&
+      typeof record.filePath === "string" &&
+      typeof record.contentMarker === "string" &&
+      typeof record.operation === "string" &&
+      typeof record.status === "string"
+    );
+  });
+}
+
+function repairCounts(tasks: RepairTask[]) {
+  const nextRetryAt = tasks
+    .map((task) => task.nextRetryAt)
+    .filter((value): value is number => typeof value === "number")
+    .sort((left, right) => left - right)[0];
+  return {
+    queuedCount: tasks.filter((task) => task.status === "queued").length,
+    cooldownCount: tasks.filter((task) => task.status === "cooldown").length,
+    runningCount: tasks.filter((task) => task.status === "running").length,
+    nextRetryAt,
+  };
 }
 
 function isWithinFolder(filePath: string, folderPath: string): boolean {

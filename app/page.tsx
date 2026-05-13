@@ -1,8 +1,39 @@
 "use client";
 
 import React from "react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import type { IndexStatus, SearchResponse } from "@/lib/types";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
+import type { IndexedDocumentLog, IndexStatus, SearchResponse } from "@/lib/types";
+
+function formatScore(value: number) {
+  return `${Math.round(value * 1000) / 10}%`;
+}
+
+function formatIndexedAt(value: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function sourceLabel(kind: string) {
+  if (kind === "filenamePath") return "filename/path";
+  if (kind === "unconfirmedVisual") return "unconfirmed visual";
+  if (kind === "rawImageVector") return "raw visual";
+  if (kind === "imageLabel") return "image label";
+  if (kind === "extractedText") return "text";
+  return kind;
+}
+
+function labelState(document: IndexedDocumentLog) {
+  if (!["png", "jpg", "jpeg"].includes(document.fileType)) return "Not image";
+  if (document.labelStatus === "generated" && document.labelEmbedded) return "Label embedded";
+  if (document.labelStatus === "generated") return "Label ready";
+  if (document.labelStatus === "pending") return "Label pending";
+  if (document.labelStatus === "failed") return "Label failed";
+  return "No label";
+}
 
 export default function HomePage() {
   const [query, setQuery] = useState("");
@@ -120,18 +151,21 @@ export default function HomePage() {
         <div className="results" aria-label="Search results">
           {search?.results.length ? (
             search.results.map((result) => (
-              <article className="result" key={result.id}>
-                <div>
-                  <strong>
-                    {result.rank}. {result.displayName}
-                  </strong>
-                  <span>{result.filePath}</span>
+              <article className="result resultRow" key={result.id}>
+                <div className="resultBody">
+                  <div className="resultHeader">
+                    <strong className="resultTitle">{result.displayName}</strong>
+                    <span className="score">{formatScore(result.score)}</span>
+                  </div>
+                  <span className="filePath">{result.filePath}</span>
+                  <p>{result.matchContext.text}</p>
+                  <div className="resultMeta">
+                    <span>#{result.rank}</span>
+                    <span>{result.readiness}</span>
+                    <span>{sourceLabel(result.matchContext.kind)}</span>
+                    {result.matchContext.confirmed === false ? <span>unconfirmed</span> : null}
+                  </div>
                 </div>
-                <p>{result.matchContext.text}</p>
-                <small>
-                  {result.fileType} | {result.readiness} | evidence {result.matchContext.kind} | score{" "}
-                  {result.score.toFixed(3)}
-                </small>
               </article>
             ))
           ) : search ? (
@@ -140,13 +174,45 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="indexPanel" aria-labelledby="index-title">
-        <div className="titleRow">
-          <div>
-            <p className="kicker">Index</p>
-            <h2 id="index-title">Approved folders</h2>
+      <section className="indexPanel surfaceShell" aria-labelledby="index-title">
+        <div className="surfaceCore indexCore">
+          <div className="titleRow">
+            <div>
+              <p className="kicker">Index</p>
+              <h2 id="index-title">Indexed folders</h2>
+            </div>
+            <span className={`statePill state-${state}`}>{state}</span>
           </div>
-        </div>
+
+          <div className="providerLine">{providerLabel}</div>
+          <div className="providerLine">{repairLabel}</div>
+
+          <div className="stats" aria-label="Index statistics">
+            <div>
+              <strong>{status?.indexedFileCount ?? 0}</strong>
+              <span>Files</span>
+            </div>
+            <div>
+              <strong>{status?.indexedChunkCount ?? 0}</strong>
+              <span>Chunks</span>
+            </div>
+            <div>
+              <strong>{status?.queuedCount ?? 0}</strong>
+              <span>Queued</span>
+            </div>
+            <div>
+              <strong>{status?.failedCount ?? 0}</strong>
+              <span>Failed</span>
+            </div>
+            <div>
+              <strong>{status?.partialCount ?? 0}</strong>
+              <span>Partial</span>
+            </div>
+            <div>
+              <strong>{status?.skippedCount ?? 0}</strong>
+              <span>Skipped</span>
+            </div>
+          </div>
 
         <form className="folderForm" onSubmit={addIndexFolder}>
           <input
@@ -189,21 +255,59 @@ export default function HomePage() {
           <p className="statusLine">Last indexed {new Date(status.lastIndexedAt).toLocaleString()}</p>
         ) : null}
 
-        {status?.failures.length ? (
-          <ul className="failures">
-            {status.failures.slice(0, 5).map((failure) => (
-              <li key={`${failure.filePath}-${failure.at}`}>
-                <strong>{failure.filePath}</strong>
-                <span>{failure.message}</span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
+          <details className="documentLog">
+            <summary>
+              <span>
+                <strong>Indexed documents</strong>
+                <small>{status?.documents.length ?? 0} records</small>
+              </span>
+              <span className="chevron" aria-hidden="true" />
+            </summary>
 
-        <p className="privacy">
-          Selected-folder text, documents, and images are sent to Gemini for embeddings.
-          Search queries plus candidate snippets and metadata are sent to Groq when reranking is available.
-        </p>
+            {status?.documents.length ? (
+              <div className="logTableWrap">
+                <table className="logTable">
+                  <thead>
+                    <tr>
+                      <th>Document</th>
+                      <th>Folder</th>
+                      <th>Image label</th>
+                      <th>Indexed</th>
+                      <th>Chunks</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {status.documents.map((document) => (
+                      <tr key={`${document.id}-${document.indexedAt}`}>
+                        <td>
+                          <strong>{document.displayName}</strong>
+                          <span>{document.filePath}</span>
+                        </td>
+                        <td>{document.folderPath}</td>
+                        <td>
+                          <span className={`labelState labelState-${document.labelStatus ?? "none"}`}>
+                            {labelState(document)}
+                          </span>
+                        </td>
+                        <td>{formatIndexedAt(document.indexedAt)}</td>
+                        <td>{document.chunkCount}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="logEmpty">No indexed documents yet.</div>
+            )}
+          </details>
+
+          {!hasFolders ? (
+            <div className="setupHint">
+              <strong>Start with one narrow folder.</strong>
+              <span>Smaller scopes make the first index easier to verify before adding larger archives.</span>
+            </div>
+          ) : null}
+        </div>
       </section>
     </main>
   );
