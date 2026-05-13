@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./styles.css";
 
 export const metadata: Metadata = {
-  title: "Browhere RAG Search",
+  title: "Browhere?",
   description: "Local folder RAG search with Gemini embeddings and Groq retrieval.",
 };
 

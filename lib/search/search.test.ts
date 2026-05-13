@@ -16,19 +16,23 @@ vi.mock("@/lib/ai/groq", () => ({
   },
 }));
 
-const { vectorSearch } = vi.hoisted(() => ({
+const { vectorSearch, getChunks } = vi.hoisted(() => ({
   vectorSearch: vi.fn(),
+  getChunks: vi.fn<() => Promise<VectorCandidate[]>>(async () => []),
 }));
 
 vi.mock("@/lib/storage/repository", () => ({
   repository: {
     getCounts: vi.fn(async () => ({ chunks: 1 })),
     vectorSearch,
+    getChunks,
   },
 }));
 
 beforeEach(() => {
   vectorSearch.mockReset();
+  getChunks.mockReset();
+  getChunks.mockResolvedValue([]);
   vi.stubEnv("BROWHERE_GEMINI_EMBEDDING_DIMENSIONS", "4");
 });
 
@@ -73,6 +77,49 @@ describe("searchFiles", () => {
 
     expect(response.results[0].matchContext.kind).toBe("metadata");
     expect(response.results[0].matchContext.text).toContain("budget.pdf");
+  });
+
+  it("keeps unlabeled raw image hits as unconfirmed visual matches", async () => {
+    vectorSearch.mockResolvedValue([
+      candidate({
+        id: "dog:raw",
+        fileId: "dog",
+        filePath: "/tmp/photos/dog.png",
+        displayName: "dog.png",
+        fileType: "png",
+        kind: "image",
+        recordKind: "rawImage",
+        contextSource: "rawImageVector",
+        score: 0.8,
+      }),
+    ]);
+
+    const response = await searchFiles("dog", 5);
+
+    expect(response.results[0].matchContext.kind).toBe("unconfirmedVisual");
+    expect(response.results[0].matchContext.confirmed).toBe(false);
+    expect(response.results[0].matchContext.text).toContain("Unconfirmed visual match");
+  });
+
+  it("uses local lexical matches for filename and path boosts", async () => {
+    vectorSearch.mockResolvedValue([]);
+    getChunks.mockResolvedValue([
+      candidate({
+        id: "signal:metadata",
+        fileId: "signal",
+        filePath: "/tmp/docs/signal-plan.pdf",
+        displayName: "signal-plan.pdf",
+        text: "file signal-plan.pdf",
+        recordKind: "metadata",
+        contextSource: "metadata",
+        score: 0,
+      }),
+    ]);
+
+    const response = await searchFiles("signal", 5);
+
+    expect(response.results[0].id).toBe("signal");
+    expect(response.results[0].matchContext.kind).toBe("filenamePath");
   });
 });
 

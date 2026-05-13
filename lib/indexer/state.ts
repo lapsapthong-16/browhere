@@ -27,6 +27,7 @@ export class IndexRuntimeState {
       unsupportedCount: counts.unsupported,
       currentFilePath: this.currentFilePath,
       lastIndexedAt: counts.lastIndexedAt,
+      failures: counts.failures,
       documents: counts.documents,
       repair: counts.repair,
       providers: {

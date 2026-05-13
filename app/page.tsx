@@ -1,8 +1,10 @@
 "use client";
 
 import React from "react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
-import type { IndexedDocumentLog, IndexStatus, SearchResponse } from "@/lib/types";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import type { IndexStatus, SearchResponse } from "@/lib/types";
+
+const examples = ["receipt from oak market", "deck with retention chart", "photo of yellow packaging"];
 
 function formatScore(value: number) {
   return `${Math.round(value * 1000) / 10}%`;
@@ -24,15 +26,6 @@ function sourceLabel(kind: string) {
   if (kind === "imageLabel") return "image label";
   if (kind === "extractedText") return "text";
   return kind;
-}
-
-function labelState(document: IndexedDocumentLog) {
-  if (!["png", "jpg", "jpeg"].includes(document.fileType)) return "Not image";
-  if (document.labelStatus === "generated" && document.labelEmbedded) return "Label embedded";
-  if (document.labelStatus === "generated") return "Label ready";
-  if (document.labelStatus === "pending") return "Label pending";
-  if (document.labelStatus === "failed") return "Label failed";
-  return "No label";
 }
 
 export default function HomePage() {
@@ -116,42 +109,71 @@ export default function HomePage() {
 
   const providerLabel = useMemo(() => {
     if (!status) return "Checking providers";
-    return `Gemini ${status.providers.geminiReady ? "ready" : "missing"} | Groq ${
+    return `Gemini ${status.providers.geminiReady ? "ready" : "missing"} / Groq ${
       status.providers.groqReady ? "ready" : "missing"
     }`;
   }, [status]);
 
+  const hasFolders = Boolean(status?.folders.length);
+  const state = status?.state ?? "loading";
+  const repairLabel = useMemo(() => {
+    const repair = status?.repair;
+    if (!repair) return "Repair queue unavailable";
+    const nextRetry = repair.nextRetryAt ? ` / next ${formatIndexedAt(repair.nextRetryAt)}` : "";
+    return `Repair ${repair.queuedCount} queued / ${repair.cooldownCount} cooldown / ${repair.runningCount} running${nextRetry}`;
+  }, [status]);
+
   return (
     <main className="shell">
-      <section className="searchPanel" aria-labelledby="app-title">
-        <div className="titleRow">
-          <div>
-            <p className="kicker">Local RAG Search</p>
-            <h1 id="app-title">Find files by memory</h1>
-          </div>
-          <span className="statePill">{status?.state ?? "loading"}</span>
+      <section className="searchPanel surfaceShell" aria-label="Search workspace">
+        <div className="surfaceCore searchCore">
+          <h1 id="app-title" className="srOnly">
+            Find files by memory
+          </h1>
+          <form className="searchForm" onSubmit={submitSearch}>
+            <label>
+              <div className="spotlightInput">
+                <span aria-hidden="true" className="searchGlyph" />
+                <input
+                  aria-label="Search files"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search files, images, receipts, documents..."
+                />
+              </div>
+            </label>
+            <button className="primaryButton" disabled={busy || !query.trim()} type="submit">
+              {busy ? "Working" : "Search"}
+            </button>
+          </form>
+
+        <div className="promptRail" aria-label="Example searches">
+          {examples.map((example) => (
+            <button key={example} onClick={() => setQuery(example)} type="button">
+              {example}
+            </button>
+          ))}
         </div>
 
-        <form className="searchForm" onSubmit={submitSearch}>
-          <input
-            aria-label="Search files"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="mcdonalds image, document about lizards..."
-          />
-          <button disabled={busy || !query.trim()} type="submit">
-            Search
-          </button>
-        </form>
-
         <p className="statusLine" aria-live="polite">
-          {message} {providerLabel}.
+          {message}
         </p>
 
-        <div className="results" aria-label="Search results">
-          {search?.results.length ? (
+        <div className="results spotlightResults" aria-label="Search results">
+          {busy ? (
+            Array.from({ length: 3 }, (_, index) => (
+              <div className="result resultRow skeletonResult" key={index}>
+                <span />
+                <span />
+                <span />
+              </div>
+            ))
+          ) : search?.results.length ? (
             search.results.map((result) => (
               <article className="result resultRow" key={result.id}>
+                <div className="fileMark" aria-hidden="true">
+                  {result.fileType.slice(0, 3).toUpperCase()}
+                </div>
                 <div className="resultBody">
                   <div className="resultHeader">
                     <strong className="resultTitle">{result.displayName}</strong>
@@ -169,8 +191,17 @@ export default function HomePage() {
               </article>
             ))
           ) : search ? (
-            <p className="empty">No matching files found.</p>
-          ) : null}
+            <div className="empty">
+              <strong>No matching files found.</strong>
+              <span>Try a visual detail, filename fragment, or phrase from a document.</span>
+            </div>
+          ) : (
+            <div className="empty initialEmpty">
+              <strong>Search is ready when your folders are.</strong>
+              <span>Add an approved folder, then search by concept instead of exact filename.</span>
+            </div>
+          )}
+        </div>
         </div>
       </section>
 
@@ -179,7 +210,7 @@ export default function HomePage() {
           <div className="titleRow">
             <div>
               <p className="kicker">Index</p>
-              <h2 id="index-title">Indexed folders</h2>
+              <h2 id="index-title">Approved folders</h2>
             </div>
             <span className={`statePill state-${state}`}>{state}</span>
           </div>
@@ -214,46 +245,45 @@ export default function HomePage() {
             </div>
           </div>
 
-        <form className="folderForm" onSubmit={addIndexFolder}>
-          <input
-            aria-label="Folder path"
-            value={folderPath}
-            onChange={(event) => setFolderPath(event.target.value)}
-            placeholder="/Users/name/Documents"
-          />
-          <button disabled={busy || !folderPath.trim()} type="submit">
-            Add
-          </button>
-        </form>
+          <form className="folderForm" onSubmit={addIndexFolder}>
+            <label>
+              <span>Folder path</span>
+              <input
+                aria-label="Folder path"
+                value={folderPath}
+                onChange={(event) => setFolderPath(event.target.value)}
+                placeholder="/Users/name/Documents"
+              />
+            </label>
+            <button className="secondaryButton" disabled={busy || !folderPath.trim()} type="submit">
+              Add
+            </button>
+          </form>
 
-        <ul className="folders">
-          {status?.folders.length ? (
-            status.folders.map((folder) => (
-              <li key={folder.path}>
-                <span>{folder.path}</span>
-                <button disabled={busy} onClick={() => void removeIndexFolder(folder.path)} type="button">
-                  Remove
-                </button>
-              </li>
-            ))
-          ) : (
-            <li>No folders approved.</li>
-          )}
-        </ul>
+          <ul className="folders">
+            {status?.folders.length ? (
+              status.folders.map((folder) => (
+                <li key={folder.path}>
+                  <span className="folderPath">{folder.path}</span>
+                  <button
+                    className="ghostButton"
+                    disabled={busy}
+                    onClick={() => void removeIndexFolder(folder.path)}
+                    type="button"
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))
+            ) : (
+              <li className="folderEmpty">No folders approved.</li>
+            )}
+          </ul>
 
-        <div className="stats">
-          <span>Files {status?.indexedFileCount ?? 0}</span>
-          <span>Chunks {status?.indexedChunkCount ?? 0}</span>
-          <span>Queued {status?.queuedCount ?? 0}</span>
-          <span>Failed {status?.failedCount ?? 0}</span>
-          <span>Partial {status?.partialCount ?? 0}</span>
-          <span>Skipped {status?.skippedCount ?? 0}</span>
-        </div>
-
-        {status?.currentFilePath ? <p className="statusLine">Indexing {status.currentFilePath}</p> : null}
-        {status?.lastIndexedAt ? (
-          <p className="statusLine">Last indexed {new Date(status.lastIndexedAt).toLocaleString()}</p>
-        ) : null}
+          {status?.currentFilePath ? <p className="statusLine">Indexing {status.currentFilePath}</p> : null}
+          {status?.lastIndexedAt ? (
+            <p className="statusLine">Last indexed {new Date(status.lastIndexedAt).toLocaleString()}</p>
+          ) : null}
 
           <details className="documentLog">
             <summary>
@@ -271,7 +301,6 @@ export default function HomePage() {
                     <tr>
                       <th>Document</th>
                       <th>Folder</th>
-                      <th>Image label</th>
                       <th>Indexed</th>
                       <th>Chunks</th>
                     </tr>
@@ -284,11 +313,6 @@ export default function HomePage() {
                           <span>{document.filePath}</span>
                         </td>
                         <td>{document.folderPath}</td>
-                        <td>
-                          <span className={`labelState labelState-${document.labelStatus ?? "none"}`}>
-                            {labelState(document)}
-                          </span>
-                        </td>
                         <td>{formatIndexedAt(document.indexedAt)}</td>
                         <td>{document.chunkCount}</td>
                       </tr>

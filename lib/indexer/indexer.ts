@@ -10,11 +10,13 @@ import { isExcludedPath } from "@/lib/files/exclusions";
 import { extractContent } from "@/lib/files/extraction";
 import { runtimeState } from "@/lib/indexer/state";
 import { repository } from "@/lib/storage/repository";
-import type { ChunkRecord, FileMetadata, IndexedFileRecord } from "@/lib/types";
+import type { ChunkRecord, FileMetadata, IndexedFileRecord, RepairErrorKind, RepairOperation, RepairTask } from "@/lib/types";
 
 const watchers = new Map<string, FSWatcher>();
 const timers = new Map<string, NodeJS.Timeout>();
 let running = false;
+let repairing = false;
+const MAX_REPAIR_TASKS_PER_RUN = 3;
 
 export async function addFolder(folderPath: string) {
   const stats = await fs.stat(folderPath);
@@ -24,6 +26,7 @@ export async function addFolder(folderPath: string) {
   await repository.addFolder(folderPath);
   await watchFolder(path.resolve(folderPath));
   void enqueueFolder(path.resolve(folderPath));
+  void runRepairQueue();
 }
 
 export async function removeFolder(folderPath: string) {
@@ -47,6 +50,7 @@ export async function removeFolder(folderPath: string) {
 export async function ensureWatchers() {
   const folders = await repository.getFolders();
   await Promise.all(folders.map((folder) => watchFolder(folder.path)));
+  void runRepairQueue();
 }
 
 export async function enqueueFolder(folderPath: string) {
@@ -110,7 +114,7 @@ async function drainQueue() {
     runtimeState.currentFilePath = undefined;
     await repository.setLastIndexedAt();
     void runRepairQueue();
-  } catch {
+  } catch (error) {
     runtimeState.state = "failed";
   } finally {
     running = false;
@@ -129,8 +133,13 @@ export async function indexFile(filePath: string) {
   const unchanged = existing?.contentMarker === marker;
   const imageFile = IMAGE_EXTENSIONS.has(ext);
   const hasCurrentMetadata = Boolean(existing?.metadataContext && existing.metadata);
-  const hasHandledImageLabel = !imageFile || existing?.labelStatus === "generated" || existing?.labelStatus === "failed";
+  const hasHandledImageLabel = !imageFile || existing?.labelStatus === "generated";
   if (unchanged && hasCurrentMetadata && hasHandledImageLabel) {
+    return;
+  }
+  if (unchanged && hasCurrentMetadata && imageFile && existing) {
+    await queueImageLabelRepair(existing, existing.labelReason || "Image caption pending.");
+    void runRepairQueue();
     return;
   }
   const existingChunks = unchanged && existing ? await repository.getChunksForFile(existing.id) : [];
@@ -145,6 +154,9 @@ export async function indexFile(filePath: string) {
   let reason = extracted.reason;
   let labelStatus: IndexedFileRecord["labelStatus"] = imageFile ? "failed" : "notApplicable";
   let labelReason: string | undefined;
+  let labelError: unknown;
+  let rawImageError: unknown;
+  let metadataError: unknown;
 
   for (let index = 0; index < extracted.chunks.length; index += 1) {
     const chunk = extracted.chunks[index];
@@ -196,6 +208,7 @@ export async function indexFile(filePath: string) {
         });
         status = "partial";
         reason = "Raw image embedding unavailable.";
+        rawImageError = error;
         continue;
       }
       throw error;
@@ -205,42 +218,38 @@ export async function indexFile(filePath: string) {
   if (imageFile) {
     const imageChunk = extracted.chunks.find((chunk) => chunk.kind === "image" && chunk.rawImage && chunk.mimeType);
     if (imageChunk?.rawImage && imageChunk.mimeType) {
-      if (unchanged && existing?.labelStatus === "failed") {
-        labelStatus = "failed";
-        labelReason = existing.labelReason || "Image label unavailable.";
-      } else {
-        try {
-          const cachedLabel = existingChunks.find((chunk) => chunk.contextSource === "imageLabel")?.text.trim();
-          const label = cachedLabel || (await gemini.labelImage(imageChunk.rawImage, imageChunk.mimeType));
-          labelStatus = "generated";
-          const vector = await gemini.embedText(label);
-          chunks.push({
-            id: `${fileId}:label`,
-            fileId,
-            filePath,
-            displayName: path.basename(filePath),
-            fileType: ext,
-            text: label,
-            vector,
-            kind: "text",
-            recordKind: "imageLabel",
-            contextSource: "imageLabel",
-            status,
-            reason,
-            modifiedMs: stats.mtimeMs,
-            sizeBytes: stats.size,
-            indexedAt,
-            metadata,
-            metadataContext,
-            provider: "gemini",
-            model: process.env.BROWHERE_GEMINI_VISION_MODEL ?? "gemini-2.0-flash",
-          });
-        } catch (error) {
-          labelStatus = "failed";
-          labelReason = `Image label unavailable: ${errorMessage(error)}`;
-          status = chunks.length > 0 ? "partial" : status;
-          reason = reason ?? "Image label unavailable.";
-        }
+      try {
+        const cachedLabel = existingChunks.find((chunk) => chunk.contextSource === "imageLabel")?.text.trim();
+        const label = cachedLabel || (await gemini.labelImage(imageChunk.rawImage, imageChunk.mimeType));
+        labelStatus = "generated";
+        const vector = await gemini.embedText(label);
+        chunks.push({
+          id: `${fileId}:label`,
+          fileId,
+          filePath,
+          displayName: path.basename(filePath),
+          fileType: ext,
+          text: label,
+          vector,
+          kind: "text",
+          recordKind: "imageLabel",
+          contextSource: "imageLabel",
+          status,
+          reason,
+          modifiedMs: stats.mtimeMs,
+          sizeBytes: stats.size,
+          indexedAt,
+          metadata,
+          metadataContext,
+          provider: "gemini",
+          model: process.env.BROWHERE_GEMINI_VISION_MODEL ?? "gemini-2.0-flash",
+        });
+      } catch (error) {
+        labelError = error;
+        labelStatus = "pending";
+        labelReason = labelReasonFor(error);
+        status = chunks.length > 0 ? "partial" : status;
+        reason = reason ?? "Image label unavailable; retry scheduled.";
       }
     }
   }
@@ -269,6 +278,7 @@ export async function indexFile(filePath: string) {
     } catch (error) {
       status = chunks.length > 0 ? "partial" : status;
       reason = reason ?? `Metadata context embedding unavailable: ${errorMessage(error)}`;
+      metadataError = error;
     }
   }
 
@@ -336,6 +346,7 @@ async function runRepairTask(task: RepairTask) {
     }
     switch (task.operation) {
       case "imageLabel":
+      case "imageLabelEmbedding":
         await repairImageLabel(file);
         break;
       case "rawImageEmbedding":
@@ -343,6 +354,8 @@ async function runRepairTask(task: RepairTask) {
         break;
       case "metadataEmbedding":
         await repairMetadataEmbedding(file);
+        break;
+      case "textEmbedding":
         break;
     }
     await repository.completeRepairTask(task.id);

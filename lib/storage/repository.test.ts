@@ -177,9 +177,12 @@ describe("IndexRepository", () => {
     await repo.upsertChunks(file.id, [chunk]);
 
     expect(await repo.findFile(file.path)).toMatchObject({ metadataContext: "file updated.md" });
-    const [candidate] = await repo.vectorSearch([0.1, 0.2, 0.3, 0.4], 5);
-    expect(candidate.contextSource).toBe("metadata");
-    expect(candidate.metadata?.displayName).toBe("updated.md");
+    const candidate = (await repo.vectorSearch([0.1, 0.2, 0.3, 0.4], 5)).find(
+      (record) => record.id === "updated-file:metadata",
+    );
+    expect(candidate).toBeDefined();
+    expect(candidate?.contextSource).toBe("metadata");
+    expect(candidate?.metadata?.displayName).toBe("updated.md");
   });
 
   it("removes records when folder is removed without touching prefix siblings", async () => {

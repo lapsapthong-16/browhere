@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { indexFile } from "@/lib/indexer/indexer";
+import { indexFile, runRepairQueue } from "@/lib/indexer/indexer";
 import { IndexRepository, repository } from "@/lib/storage/repository";
 
 vi.mock("@/lib/storage/repository", async () => {
@@ -159,8 +159,52 @@ describe("indexFile", () => {
     const repo = await getMockedRepository();
     const file = await repo.findFile(filePath);
     expect(file?.status).toBe("partial");
-    expect(file?.labelStatus).toBe("failed");
+    expect(file?.labelStatus).toBe("pending");
+    expect(file?.labelReason).toContain("Retry scheduled");
+    expect(await repo.getRepairTasks()).toHaveLength(1);
     expect(file?.chunkCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("repairs a failed image label later without duplicating chunks", async () => {
+    const filePath = path.join(root, "dog.png");
+    await fs.writeFile(
+      filePath,
+      Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1,
+      ]),
+    );
+    let labelCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("generateContent")) {
+          labelCalls += 1;
+          if (labelCalls === 1) {
+            return { ok: false, text: async () => "429 quota retryDelay 1s" };
+          }
+          return {
+            ok: true,
+            json: async () => ({ candidates: [{ content: { parts: [{ text: "Brown dog on grass" }] } }] }),
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({ embedding: { values: [0.1, 0.2, 0.3, 0.4] } }),
+        };
+      }),
+    );
+
+    await indexFile(filePath);
+    const repo = await getMockedRepository();
+    const [task] = await repo.getRepairTasks();
+    await repo.upsertRepairTask({ ...task, status: "queued", nextRetryAt: Date.now() - 1 });
+    await runRepairQueue();
+
+    const file = await repo.findFile(filePath);
+    const chunks = await repo.getChunksForFile(file!.id);
+    expect(file?.labelStatus).toBe("generated");
+    expect(chunks.filter((chunk) => chunk.contextSource === "imageLabel")).toHaveLength(1);
+    expect(await repo.getRepairTasks()).toHaveLength(0);
   });
 });
 

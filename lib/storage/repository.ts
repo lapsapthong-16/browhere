@@ -9,6 +9,7 @@ import type {
   IndexedFileRecord,
   IndexedFolder,
   IndexedDocumentLog,
+  IndexFailure,
   RepairTask,
   RecordKind,
 } from "@/lib/types";
@@ -22,6 +23,7 @@ const CHUNK_STRING_COLUMNS = ["recordKind", "contextSource", "metadata", "metada
 interface Metadata {
   schemaVersion: number;
   folders: IndexedFolder[];
+  failures: IndexFailure[];
   documents: IndexedDocumentLog[];
   repairTasks: RepairTask[];
   documentLogInitialized: boolean;
@@ -31,8 +33,9 @@ interface Metadata {
 }
 
 const DEFAULT_METADATA: Metadata = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   folders: [],
+  failures: [],
   documents: [],
   repairTasks: [],
   documentLogInitialized: false,
@@ -74,6 +77,8 @@ export class IndexRepository {
     const normalized = path.resolve(folderPath);
     const metadata = await this.readMetadata();
     metadata.folders = metadata.folders.filter((folder) => folder.path !== normalized);
+    metadata.documents = metadata.documents.filter((document) => !isWithinFolder(document.filePath, normalized));
+    metadata.repairTasks = metadata.repairTasks.filter((task) => !isWithinFolder(task.filePath, normalized));
     await this.writeMetadata(metadata);
     await this.deleteByFolder(normalized);
   }
@@ -95,21 +100,40 @@ export class IndexRepository {
     if (table) {
       await this.ensureStringColumns(table, FILE_STRING_COLUMNS);
       await table.add([normalizeFileRow(file) as unknown as IndexedFileRecord]);
+      await this.recordDocument(file);
       return;
     }
     await this.createTable(FILES_TABLE, [normalizeFileRow(file) as unknown as IndexedFileRecord]);
+    await this.recordDocument(file);
   }
 
   async upsertChunks(fileId: string, chunks: ChunkRecord[]) {
     await this.deleteChunksForFile(fileId);
-    if (chunks.length === 0) return;
+    if (chunks.length === 0) {
+      await this.updateDocumentChunkCount(fileId, 0);
+      return;
+    }
     const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
     if (table) {
       await this.ensureStringColumns(table, CHUNK_STRING_COLUMNS);
       await table.add(chunks.map((chunk) => normalizeChunkRow(chunk) as unknown as ChunkRecord));
+      await this.updateDocumentChunkCount(fileId, chunks.length);
       return;
     }
     await this.createTable(CHUNKS_TABLE, chunks.map((chunk) => normalizeChunkRow(chunk) as unknown as ChunkRecord));
+    await this.updateDocumentChunkCount(fileId, chunks.length);
+  }
+
+  async upsertChunk(chunk: ChunkRecord) {
+    const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
+    if (table) {
+      await this.ensureStringColumns(table, CHUNK_STRING_COLUMNS);
+      await table.delete(`id = '${escapeSql(chunk.id)}'`);
+      await table.add([normalizeChunkRow(chunk) as unknown as ChunkRecord]);
+    } else {
+      await this.createTable(CHUNKS_TABLE, [normalizeChunkRow(chunk) as unknown as ChunkRecord]);
+    }
+    await this.updateDocumentChunkCount(chunk.fileId, await this.countChunksForFile(chunk.fileId));
   }
 
   async getChunksForFile(fileId: string): Promise<ChunkRecord[]> {
@@ -119,12 +143,34 @@ export class IndexRepository {
     return rows.filter((row) => row.fileId === fileId).map(normalizeChunkRecord);
   }
 
+  async getChunks(limit = 100_000): Promise<ChunkRecord[]> {
+    await this.pruneUnapprovedRecords();
+    const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
+    if (!table) return [];
+    const rows = (await table.query().limit(limit).toArray()) as ChunkRecord[];
+    return rows.map(normalizeChunkRecord);
+  }
+
+  async updateFile(file: IndexedFileRecord) {
+    const table = await this.openTable<IndexedFileRecord>(FILES_TABLE);
+    if (table) {
+      await this.ensureStringColumns(table, FILE_STRING_COLUMNS);
+      await table.delete(`id = '${escapeSql(file.id)}'`);
+      await table.add([normalizeFileRow(file) as unknown as IndexedFileRecord]);
+    } else {
+      await this.createTable(FILES_TABLE, [normalizeFileRow(file) as unknown as IndexedFileRecord]);
+    }
+    await this.recordDocument(file);
+  }
+
   async deleteFile(fileId: string) {
     const table = await this.openTable<IndexedFileRecord>(FILES_TABLE);
     if (table) {
       await table.delete(`id = '${escapeSql(fileId)}'`);
     }
     await this.deleteChunksForFile(fileId);
+    await this.deleteDocumentLog(fileId);
+    await this.deleteRepairTasksForFile(fileId);
   }
 
   async deleteByPath(filePath: string) {
@@ -155,7 +201,7 @@ export class IndexRepository {
     await this.pruneUnapprovedRecords();
     const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
     if (!table) return [];
-    const rows = (await table.search(vector).limit(limit).toArray()) as Array<
+    const rows = (await table.search(vector).nprobes(20).limit(limit).toArray()) as Array<
       ChunkRecord & { _distance?: number }
     >;
     return rows.map((row) => ({
@@ -165,23 +211,24 @@ export class IndexRepository {
   }
 
   async getCounts() {
-    await this.pruneUnapprovedRecords();
-    const files = await this.getFiles();
-    const chunksTable = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
-    const chunks = chunksTable ? await chunksTable.countRows() : 0;
     const metadata = await this.readMetadata();
+    const documents = await this.getApprovedDocumentLogs(metadata);
+    const repair = repairCounts(metadata.repairTasks);
     return {
-      files: files.length,
-      chunks,
-      failed: files.filter((file) => file.status === "failed").length,
-      partial: files.filter((file) => file.status === "partial").length,
+      files: documents.length,
+      chunks: documents.reduce((total, document) => total + document.chunkCount, 0),
+      failed: documents.filter((document) => document.status === "failed").length,
+      partial: documents.filter((document) => document.status === "partial").length,
       skipped: metadata.skippedCount,
       unsupported: metadata.unsupportedCount,
+      failures: [],
       lastIndexedAt: metadata.lastIndexedAt,
+      documents,
+      repair,
     };
   }
 
-  async recordFailure(filePath: string, message: string) {
+  async getRepairTasks(): Promise<RepairTask[]> {
     const metadata = await this.readMetadata();
     const approved = metadata.repairTasks.filter((task) =>
       metadata.folders.some((folder) => isWithinFolder(task.filePath, folder.path)),
@@ -210,6 +257,17 @@ export class IndexRepository {
     await this.writeMetadata(metadata);
   }
 
+  async recordFailure(_filePath: string, _message: string) {
+    await this.clearFailures();
+  }
+
+  async clearFailures() {
+    const metadata = await this.readMetadata();
+    if (metadata.failures.length === 0) return;
+    metadata.failures = [];
+    await this.writeMetadata(metadata);
+  }
+
   async incrementSkipped(kind: "skipped" | "unsupported") {
     const metadata = await this.readMetadata();
     if (kind === "skipped") metadata.skippedCount += 1;
@@ -235,12 +293,9 @@ export class IndexRepository {
       displayName: file.displayName,
       filePath: file.path,
       folderPath,
-      fileType: file.fileType,
       indexedAt: file.indexedAt ?? Date.now(),
       chunkCount: file.chunkCount,
       status: file.status,
-      labelStatus: file.labelStatus,
-      labelEmbedded: file.labelStatus === "generated",
     };
     metadata.documents = [
       document,
@@ -283,39 +338,27 @@ export class IndexRepository {
 
   private async getApprovedDocumentLogs(metadata: Metadata): Promise<IndexedDocumentLog[]> {
     if (metadata.documentLogInitialized) {
-      return this.enrichDocumentLogs(metadata);
+      return this.pruneDocumentLogs(metadata);
     }
 
     const files = await this.getFiles();
     metadata.documents = files
       .filter((file) => file.status === "indexed" || file.status === "partial" || file.status === "failed")
-      .map((file) => documentLogFor(file, metadata.folders))
+      .map((file) => ({
+        id: file.id,
+        displayName: file.displayName,
+        filePath: file.path,
+        folderPath:
+          file.metadata?.approvedFolderRoot ??
+          metadata.folders.find((folder) => isWithinFolder(file.path, folder.path))?.path ??
+          path.dirname(file.path),
+        indexedAt: file.indexedAt ?? file.metadata?.indexedAt ?? Date.now(),
+        chunkCount: file.chunkCount,
+        status: file.status,
+      }))
       .sort((left, right) => right.indexedAt - left.indexedAt);
     metadata.documentLogInitialized = true;
     await this.writeMetadata(metadata);
-    return this.pruneDocumentLogs(metadata);
-  }
-
-  private async enrichDocumentLogs(metadata: Metadata): Promise<IndexedDocumentLog[]> {
-    let changed = false;
-    const byId = new Map((await this.getFiles()).map((file) => [file.id, file]));
-    metadata.documents = metadata.documents.map((document) => {
-      const file = byId.get(document.id);
-      if (!file) return document;
-      const next = documentLogFor(file, metadata.folders);
-      next.chunkCount = document.chunkCount;
-      const needsUpdate =
-        document.fileType !== next.fileType ||
-        document.labelStatus !== next.labelStatus ||
-        document.labelEmbedded !== next.labelEmbedded ||
-        document.chunkCount !== next.chunkCount ||
-        document.status !== next.status;
-      if (needsUpdate) changed = true;
-      return needsUpdate ? next : document;
-    });
-    if (changed) {
-      await this.writeMetadata(metadata);
-    }
     return this.pruneDocumentLogs(metadata);
   }
 
@@ -336,6 +379,12 @@ export class IndexRepository {
     const files = await this.getFiles();
     for (const file of files.filter((file) => !isApproved(file.path))) {
       await this.deleteFile(file.id);
+    }
+    const metadata = await this.readMetadata();
+    const nextRepairTasks = metadata.repairTasks.filter((task) => isApproved(task.filePath));
+    if (nextRepairTasks.length !== metadata.repairTasks.length) {
+      metadata.repairTasks = nextRepairTasks;
+      await this.writeMetadata(metadata);
     }
 
     const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
@@ -381,7 +430,8 @@ export class IndexRepository {
       add(rows: T[]): Promise<void>;
       delete(predicate: string): Promise<void>;
       query(): { limit(count: number): { toArray(): Promise<unknown[]> } };
-      search(vector: number[]): { limit(count: number): { toArray(): Promise<unknown[]> } };
+      search(vector: number[]): { nprobes(count: number): { limit(count: number): { toArray(): Promise<unknown[]> } } };
+      countRows(): Promise<number>;
       schema(): Promise<{ fields: Array<{ name: string }> }>;
       addColumns(columns: Array<{ name: string; valueSql: string }>): Promise<unknown>;
     }>;
@@ -415,6 +465,7 @@ export class IndexRepository {
         ...DEFAULT_METADATA,
         ...JSON.parse(text),
         schemaVersion: DEFAULT_METADATA.schemaVersion,
+        failures: [],
       };
       metadata.repairTasks = normalizeRepairTasks(metadata.repairTasks);
       await this.writeMetadata(metadata);
@@ -482,7 +533,8 @@ function normalizeFileRecord(row: IndexedFileRecord): IndexedFileRecord {
       row.labelStatus === "notApplicable" ||
       row.labelStatus === "generated" ||
       row.labelStatus === "failed" ||
-      row.labelStatus === "pending"
+      row.labelStatus === "pending" ||
+      row.labelStatus === "retrying"
         ? row.labelStatus
         : undefined,
     labelReason: row.labelReason || undefined,
@@ -527,24 +579,6 @@ function normalizeContextSource(value: unknown, recordKind: RecordKind): Context
   if (recordKind === "imageLabel") return "imageLabel";
   if (recordKind === "metadata") return "metadata";
   return "extractedText";
-}
-
-function documentLogFor(file: IndexedFileRecord, folders: IndexedFolder[]): IndexedDocumentLog {
-  return {
-    id: file.id,
-    displayName: file.displayName,
-    filePath: file.path,
-    folderPath:
-      file.metadata?.approvedFolderRoot ??
-      folders.find((folder) => isWithinFolder(file.path, folder.path))?.path ??
-      path.dirname(file.path),
-    fileType: file.fileType,
-    indexedAt: file.indexedAt ?? file.metadata?.indexedAt ?? Date.now(),
-    chunkCount: file.chunkCount,
-    status: file.status,
-    labelStatus: file.labelStatus,
-    labelEmbedded: file.labelStatus === "generated",
-  };
 }
 
 function normalizeRepairTasks(value: unknown): RepairTask[] {

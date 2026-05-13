@@ -6,7 +6,9 @@ export type MatchKind = ContextSource | "filenamePath" | "unconfirmedVisual" | "
 export type RepairOperation =
   | "rawImageEmbedding"
   | "imageLabel"
-  | "metadataEmbedding";
+  | "imageLabelEmbedding"
+  | "metadataEmbedding"
+  | "textEmbedding";
 export type RepairTaskStatus = "queued" | "running" | "cooldown";
 export type RepairErrorKind = "quota" | "providerUnavailable" | "transient";
 
@@ -44,7 +46,7 @@ export interface IndexedFileRecord {
   chunkCount: number;
   metadata?: FileMetadata;
   metadataContext?: string;
-  labelStatus?: "notApplicable" | "generated" | "failed" | "pending";
+  labelStatus?: "notApplicable" | "generated" | "failed" | "pending" | "retrying";
   labelReason?: string;
 }
 
@@ -70,6 +72,12 @@ export interface ChunkRecord {
   model?: string;
 }
 
+export interface IndexFailure {
+  filePath: string;
+  message: string;
+  at: number;
+}
+
 export interface RepairTask {
   id: string;
   fileId: string;
@@ -89,12 +97,9 @@ export interface IndexedDocumentLog {
   displayName: string;
   filePath: string;
   folderPath: string;
-  fileType: string;
   indexedAt: number;
   chunkCount: number;
   status: FileStatus;
-  labelStatus?: IndexedFileRecord["labelStatus"];
-  labelEmbedded?: boolean;
 }
 
 export interface IndexStatus {
@@ -110,6 +115,7 @@ export interface IndexStatus {
   unsupportedCount: number;
   currentFilePath?: string;
   lastIndexedAt?: number;
+  failures: IndexFailure[];
   documents: IndexedDocumentLog[];
   repair: {
     queuedCount: number;
@@ -136,6 +142,8 @@ export interface SearchResult {
     kind: MatchKind;
     text: string;
     sources?: ContextSource[];
+    confirmed?: boolean;
+    unconfirmedReason?: string;
   };
   metadata?: Pick<FileMetadata, "displayName" | "extension" | "mediaType" | "sizeBytes" | "modifiedDate" | "parentFolders" | "imageWidth" | "imageHeight">;
   readiness: "ready" | "partial";
