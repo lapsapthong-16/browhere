@@ -1,9 +1,10 @@
 import os from "node:os";
 import path from "node:path";
+import * as lancedb from "@lancedb/lancedb";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { IndexRepository } from "@/lib/storage/repository";
-import type { ChunkRecord, IndexedFileRecord } from "@/lib/types";
+import type { ChunkRecord, FileMetadata, IndexedFileRecord } from "@/lib/types";
 
 let root = "";
 let repo: IndexRepository;
@@ -92,6 +93,93 @@ describe("IndexRepository", () => {
     const [candidate] = await repo.vectorSearch([0.1, 0.2, 0.3, 0.4], 5);
     expect(candidate.recordKind).toBe("rawImage");
     expect(candidate.contextSource).toBe("rawImageVector");
+  });
+
+  it("adds new metadata columns to existing LanceDB tables before writing", async () => {
+    await repo.addFolder("/tmp/docs");
+    const db = await lancedb.connect(root);
+    await db.createTable("files", [
+      {
+        id: "legacy-file",
+        path: "/tmp/docs/legacy.md",
+        displayName: "legacy.md",
+        fileType: "md",
+        sizeBytes: 1,
+        modifiedMs: 1,
+        contentMarker: "1:1",
+        status: "indexed",
+        indexedAt: 1,
+        chunkCount: 0,
+      },
+    ]);
+    await db.createTable("chunks", [
+      {
+        id: "legacy-file:0",
+        fileId: "legacy-file",
+        filePath: "/tmp/docs/legacy.md",
+        displayName: "legacy.md",
+        fileType: "md",
+        text: "legacy",
+        vector: [0.1, 0.2, 0.3, 0.4],
+        kind: "text",
+        status: "indexed",
+        modifiedMs: 1,
+        sizeBytes: 1,
+        indexedAt: 1,
+      },
+    ]);
+    const metadata: FileMetadata = {
+      displayName: "updated.md",
+      extension: "md",
+      mediaType: "text/markdown",
+      sizeBytes: 2,
+      sizeClass: "small",
+      modifiedMs: 2,
+      modifiedDate: new Date(2).toISOString(),
+      approvedFolderRoot: "/tmp/docs",
+      parentFolders: ["tmp", "docs"],
+      indexedAt: 2,
+    };
+    const file: IndexedFileRecord = {
+      id: "updated-file",
+      path: "/tmp/docs/updated.md",
+      displayName: "updated.md",
+      fileType: "md",
+      sizeBytes: 2,
+      modifiedMs: 2,
+      contentMarker: "2:2",
+      status: "indexed",
+      indexedAt: 2,
+      chunkCount: 1,
+      metadata,
+      metadataContext: "file updated.md",
+    };
+    const chunk: ChunkRecord = {
+      id: "updated-file:metadata",
+      fileId: file.id,
+      filePath: file.path,
+      displayName: file.displayName,
+      fileType: file.fileType,
+      text: "file updated.md",
+      vector: [0.1, 0.2, 0.3, 0.4],
+      kind: "text",
+      recordKind: "metadata",
+      contextSource: "metadata",
+      status: "indexed",
+      modifiedMs: 2,
+      sizeBytes: 2,
+      indexedAt: 2,
+      metadata,
+      metadataContext: "file updated.md",
+    };
+
+    await repo.upsertFile(file);
+    await repo.upsertChunks(file.id, [chunk]);
+
+    expect(await repo.findFile(file.path)).toMatchObject({ metadataContext: "file updated.md" });
+    const [candidate] = await repo.vectorSearch([0.1, 0.2, 0.3, 0.4], 5);
+    expect(candidate.contextSource).toBe("metadata");
+    expect(candidate.metadata?.displayName).toBe("updated.md");
   });
 
   it("removes records when folder is removed without touching prefix siblings", async () => {

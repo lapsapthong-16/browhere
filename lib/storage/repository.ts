@@ -15,6 +15,8 @@ import type {
 const FILES_TABLE = "files";
 const CHUNKS_TABLE = "chunks";
 const META_FILE = "metadata.json";
+const FILE_STRING_COLUMNS = ["metadata", "metadataContext", "labelStatus", "labelReason"] as const;
+const CHUNK_STRING_COLUMNS = ["recordKind", "contextSource", "metadata", "metadataContext", "provider", "model"] as const;
 
 interface Metadata {
   schemaVersion: number;
@@ -86,6 +88,7 @@ export class IndexRepository {
     await this.deleteFile(file.id);
     const table = await this.openTable<IndexedFileRecord>(FILES_TABLE);
     if (table) {
+      await this.ensureStringColumns(table, FILE_STRING_COLUMNS);
       await table.add([normalizeFileRow(file) as unknown as IndexedFileRecord]);
       return;
     }
@@ -97,6 +100,7 @@ export class IndexRepository {
     if (chunks.length === 0) return;
     const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
     if (table) {
+      await this.ensureStringColumns(table, CHUNK_STRING_COLUMNS);
       await table.add(chunks.map((chunk) => normalizeChunkRow(chunk) as unknown as ChunkRecord));
       return;
     }
@@ -244,6 +248,8 @@ export class IndexRepository {
       query(): { limit(count: number): { toArray(): Promise<unknown[]> } };
       search(vector: number[]): { limit(count: number): { toArray(): Promise<unknown[]> } };
       countRows(): Promise<number>;
+      schema(): Promise<{ fields: Array<{ name: string }> }>;
+      addColumns(columns: Array<{ name: string; valueSql: string }>): Promise<unknown>;
     }>;
   }
 
@@ -253,6 +259,17 @@ export class IndexRepository {
       name,
       rows as Array<Record<string, unknown>>,
     ) as Promise<unknown> as Promise<NonNullable<Awaited<ReturnType<IndexRepository["openTable"]>>>>;
+  }
+
+  private async ensureStringColumns(
+    table: NonNullable<Awaited<ReturnType<IndexRepository["openTable"]>>>,
+    columns: readonly string[],
+  ) {
+    const schema = await table.schema();
+    const existing = new Set(schema.fields.map((field) => field.name));
+    const missing = columns.filter((column) => !existing.has(column));
+    if (missing.length === 0) return;
+    await table.addColumns(missing.map((name) => ({ name, valueSql: "''" })));
   }
 
   private async readMetadata(): Promise<Metadata> {
