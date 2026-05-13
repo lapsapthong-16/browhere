@@ -19,6 +19,15 @@ function formatIndexedAt(value: number) {
   }).format(new Date(value));
 }
 
+function sourceLabel(kind: string) {
+  if (kind === "filenamePath") return "filename/path";
+  if (kind === "unconfirmedVisual") return "unconfirmed visual";
+  if (kind === "rawImageVector") return "raw visual";
+  if (kind === "imageLabel") return "image label";
+  if (kind === "extractedText") return "text";
+  return kind;
+}
+
 export default function HomePage() {
   const [query, setQuery] = useState("");
   const [folderPath, setFolderPath] = useState("");
@@ -107,6 +116,12 @@ export default function HomePage() {
 
   const hasFolders = Boolean(status?.folders.length);
   const state = status?.state ?? "loading";
+  const repairLabel = useMemo(() => {
+    const repair = status?.repair;
+    if (!repair) return "Repair queue unavailable";
+    const nextRetry = repair.nextRetryAt ? ` / next ${formatIndexedAt(repair.nextRetryAt)}` : "";
+    return `Repair ${repair.queuedCount} queued / ${repair.cooldownCount} cooldown / ${repair.runningCount} running${nextRetry}`;
+  }, [status]);
 
   return (
     <main className="shell">
@@ -169,7 +184,8 @@ export default function HomePage() {
                   <div className="resultMeta">
                     <span>#{result.rank}</span>
                     <span>{result.readiness}</span>
-                    <span>{result.matchContext.kind}</span>
+                    <span>{sourceLabel(result.matchContext.kind)}</span>
+                    {result.matchContext.confirmed === false ? <span>unconfirmed</span> : null}
                   </div>
                 </div>
               </article>
@@ -200,6 +216,7 @@ export default function HomePage() {
           </div>
 
           <div className="providerLine">{providerLabel}</div>
+          <div className="providerLine">{repairLabel}</div>
 
           <div className="stats" aria-label="Index statistics">
             <div>

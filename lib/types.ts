@@ -2,7 +2,15 @@ export type IndexState = "notConfigured" | "ready" | "indexing" | "stale" | "fai
 export type FileStatus = "indexed" | "new" | "changed" | "missing" | "failed" | "partial" | "unsupported";
 export type RecordKind = "text" | "rawImage" | "imageLabel" | "metadata";
 export type ContextSource = "extractedText" | "rawImageVector" | "imageLabel" | "metadata";
-export type MatchKind = ContextSource | "explanation";
+export type MatchKind = ContextSource | "filenamePath" | "unconfirmedVisual" | "explanation";
+export type RepairOperation =
+  | "rawImageEmbedding"
+  | "imageLabel"
+  | "imageLabelEmbedding"
+  | "metadataEmbedding"
+  | "textEmbedding";
+export type RepairTaskStatus = "queued" | "running" | "cooldown";
+export type RepairErrorKind = "quota" | "providerUnavailable" | "transient";
 
 export interface FileMetadata {
   displayName: string;
@@ -38,7 +46,7 @@ export interface IndexedFileRecord {
   chunkCount: number;
   metadata?: FileMetadata;
   metadataContext?: string;
-  labelStatus?: "notApplicable" | "generated" | "failed";
+  labelStatus?: "notApplicable" | "generated" | "failed" | "pending" | "retrying";
   labelReason?: string;
 }
 
@@ -70,6 +78,20 @@ export interface IndexFailure {
   at: number;
 }
 
+export interface RepairTask {
+  id: string;
+  fileId: string;
+  filePath: string;
+  contentMarker: string;
+  operation: RepairOperation;
+  status: RepairTaskStatus;
+  retryCount: number;
+  lastAttemptAt?: number;
+  nextRetryAt?: number;
+  lastError?: string;
+  errorKind?: RepairErrorKind;
+}
+
 export interface IndexedDocumentLog {
   id: string;
   displayName: string;
@@ -95,6 +117,12 @@ export interface IndexStatus {
   lastIndexedAt?: number;
   failures: IndexFailure[];
   documents: IndexedDocumentLog[];
+  repair: {
+    queuedCount: number;
+    cooldownCount: number;
+    runningCount: number;
+    nextRetryAt?: number;
+  };
   message: string;
   providers: {
     geminiReady: boolean;
@@ -114,6 +142,8 @@ export interface SearchResult {
     kind: MatchKind;
     text: string;
     sources?: ContextSource[];
+    confirmed?: boolean;
+    unconfirmedReason?: string;
   };
   metadata?: Pick<FileMetadata, "displayName" | "extension" | "mediaType" | "sizeBytes" | "modifiedDate" | "parentFolders" | "imageWidth" | "imageHeight">;
   readiness: "ready" | "partial";

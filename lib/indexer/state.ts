@@ -29,6 +29,7 @@ export class IndexRuntimeState {
       lastIndexedAt: counts.lastIndexedAt,
       failures: counts.failures,
       documents: counts.documents,
+      repair: counts.repair,
       providers: {
         geminiReady: Boolean(getGeminiConfig().apiKey),
         groqReady: Boolean(getGroqConfig().apiKey),
