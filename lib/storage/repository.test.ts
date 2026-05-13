@@ -58,6 +58,7 @@ describe("IndexRepository", () => {
   });
 
   it("normalizes old chunk rows without record kind or context source", async () => {
+    await repo.addFolder("/tmp/docs");
     const file: IndexedFileRecord = {
       id: "file-old",
       path: "/tmp/docs/old.png",
@@ -95,6 +96,7 @@ describe("IndexRepository", () => {
 
   it("removes records when folder is removed without touching prefix siblings", async () => {
     await repo.addFolder("/tmp/docs");
+    await repo.addFolder("/tmp/docs2");
     const file = {
       id: "file-1",
       path: "/tmp/docs/a.md",
@@ -113,12 +115,79 @@ describe("IndexRepository", () => {
       path: "/tmp/docs2/b.md",
       displayName: "b.md",
     };
+    const chunk = {
+      id: "chunk-1",
+      fileId: file.id,
+      filePath: file.path,
+      displayName: file.displayName,
+      fileType: file.fileType,
+      text: "delete me",
+      vector: [0.1, 0.2, 0.3, 0.4],
+      kind: "text",
+      status: "indexed",
+      modifiedMs: 1,
+      sizeBytes: 1,
+      indexedAt: 1,
+    } satisfies ChunkRecord;
+    const siblingChunk = {
+      ...chunk,
+      id: "chunk-2",
+      fileId: sibling.id,
+      filePath: sibling.path,
+      displayName: sibling.displayName,
+      text: "keep me",
+    } satisfies ChunkRecord;
+    const orphanChunk = {
+      ...chunk,
+      id: "chunk-orphan",
+      fileId: "missing-file",
+      text: "delete orphan too",
+    } satisfies ChunkRecord;
     await repo.upsertFile(file);
     await repo.upsertFile(sibling);
+    await repo.upsertChunks(file.id, [chunk]);
+    await repo.upsertChunks(sibling.id, [siblingChunk]);
+    await repo.upsertChunks(orphanChunk.fileId, [orphanChunk]);
 
     await repo.removeFolder("/tmp/docs");
 
-    expect(await repo.getFolders()).toEqual([]);
+    expect((await repo.getFolders()).map((folder) => folder.path)).toEqual(["/tmp/docs2"]);
     expect((await repo.getFiles()).map((record) => record.id)).toEqual(["file-2"]);
+    expect(await repo.getCounts()).toMatchObject({ files: 1, chunks: 1 });
+    expect((await repo.vectorSearch([0.1, 0.2, 0.3, 0.4], 5)).map((record) => record.id)).toEqual(["chunk-2"]);
+  });
+
+  it("prunes stale files and chunks outside approved folders", async () => {
+    const file: IndexedFileRecord = {
+      id: "stale-file",
+      path: "/tmp/removed/a.md",
+      displayName: "a.md",
+      fileType: "md",
+      sizeBytes: 1,
+      modifiedMs: 1,
+      contentMarker: "1:1",
+      status: "indexed",
+      indexedAt: 1,
+      chunkCount: 1,
+    };
+    const chunk: ChunkRecord = {
+      id: "stale-chunk",
+      fileId: file.id,
+      filePath: file.path,
+      displayName: file.displayName,
+      fileType: file.fileType,
+      text: "stale",
+      vector: [0.1, 0.2, 0.3, 0.4],
+      kind: "text",
+      status: "indexed",
+      modifiedMs: 1,
+      sizeBytes: 1,
+      indexedAt: 1,
+    };
+    await repo.upsertFile(file);
+    await repo.upsertChunks(file.id, [chunk]);
+
+    expect(await repo.getCounts()).toMatchObject({ files: 0, chunks: 0 });
+    expect(await repo.vectorSearch([0.1, 0.2, 0.3, 0.4], 5)).toEqual([]);
   });
 });

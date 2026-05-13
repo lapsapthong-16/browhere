@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { indexFile } from "@/lib/indexer/indexer";
-import { IndexRepository } from "@/lib/storage/repository";
+import { IndexRepository, repository } from "@/lib/storage/repository";
 
 vi.mock("@/lib/storage/repository", async () => {
   const actual = await vi.importActual<typeof import("@/lib/storage/repository")>(
@@ -20,6 +20,8 @@ let root = "";
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "browhere-indexer-"));
+  await repository.reset();
+  await repository.addFolder(root);
   vi.stubEnv("GEMINI_API_KEY", "key");
   vi.stubEnv("BROWHERE_GEMINI_EMBEDDING_DIMENSIONS", "4");
   vi.stubGlobal(
@@ -38,6 +40,17 @@ afterEach(async () => {
 });
 
 describe("indexFile", () => {
+  it("skips files outside approved folders", async () => {
+    await repository.removeFolder(root);
+    const filePath = path.join(root, "outside.md");
+    await fs.writeFile(filePath, "outside content");
+
+    await indexFile(filePath);
+
+    expect(await repository.findFile(filePath)).toBeUndefined();
+    expect(await repository.getCounts()).toMatchObject({ files: 0, chunks: 0 });
+  });
+
   it("indexes text fixture chunks", async () => {
     const filePath = path.join(root, "lizards.md");
     await fs.writeFile(filePath, "lizards live in warm habitats");

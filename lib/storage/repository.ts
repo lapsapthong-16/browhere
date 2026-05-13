@@ -130,6 +130,7 @@ export class IndexRepository {
     for (const file of files.filter((file) => isWithinFolder(file.path, folderPath))) {
       await this.deleteFile(file.id);
     }
+    await this.deleteChunksByFolder(folderPath);
   }
 
   async deleteMissing(knownPaths: Set<string>, folderPath: string) {
@@ -142,6 +143,7 @@ export class IndexRepository {
   }
 
   async vectorSearch(vector: number[], limit: number): Promise<VectorCandidate[]> {
+    await this.pruneUnapprovedRecords();
     const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
     if (!table) return [];
     const rows = (await table.search(vector).limit(limit).toArray()) as Array<ChunkRecord & { _distance?: number }>;
@@ -152,6 +154,7 @@ export class IndexRepository {
   }
 
   async getCounts() {
+    await this.pruneUnapprovedRecords();
     const files = await this.getFiles();
     const chunksTable = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
     const chunks = chunksTable ? await chunksTable.countRows() : 0;
@@ -188,10 +191,39 @@ export class IndexRepository {
     await this.writeMetadata(metadata);
   }
 
+  async pruneUnapprovedRecords() {
+    const folders = await this.getFolders();
+    const isApproved = (filePath: string) => folders.some((folder) => isWithinFolder(filePath, folder.path));
+    const files = await this.getFiles();
+    for (const file of files.filter((file) => !isApproved(file.path))) {
+      await this.deleteFile(file.id);
+    }
+
+    const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
+    if (!table) return;
+    const rows = (await table.query().limit(100_000).toArray()) as ChunkRecord[];
+    const staleChunkIds = rows.filter((row) => !isApproved(row.filePath)).map((row) => row.id);
+    for (const chunkId of staleChunkIds) {
+      await table.delete(`id = '${escapeSql(chunkId)}'`);
+    }
+  }
+
   private async deleteChunksForFile(fileId: string) {
     const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
     if (table) {
       await table.delete(`"fileId" = '${escapeSql(fileId)}'`);
+    }
+  }
+
+  private async deleteChunksByFolder(folderPath: string) {
+    const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
+    if (!table) return;
+    const rows = (await table.query().limit(100_000).toArray()) as ChunkRecord[];
+    const chunkIds = rows
+      .filter((row) => isWithinFolder(row.filePath, folderPath))
+      .map((row) => row.id);
+    for (const chunkId of chunkIds) {
+      await table.delete(`id = '${escapeSql(chunkId)}'`);
     }
   }
 

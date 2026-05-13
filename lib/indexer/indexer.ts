@@ -29,6 +29,17 @@ export async function addFolder(folderPath: string) {
 export async function removeFolder(folderPath: string) {
   const normalized = path.resolve(folderPath);
   await repository.removeFolder(normalized);
+  for (const filePath of runtimeState.queued) {
+    if (isWithinFolder(filePath, normalized)) {
+      runtimeState.queued.delete(filePath);
+    }
+  }
+  for (const [filePath, timer] of timers) {
+    if (isWithinFolder(filePath, normalized)) {
+      clearTimeout(timer);
+      timers.delete(filePath);
+    }
+  }
   await watchers.get(normalized)?.close();
   watchers.delete(normalized);
 }
@@ -108,6 +119,10 @@ async function drainQueue() {
 }
 
 export async function indexFile(filePath: string) {
+  if (!(await isApprovedFile(filePath))) {
+    await repository.deleteByPath(filePath);
+    return;
+  }
   const stats = await fs.stat(filePath);
   const ext = extensionFor(filePath);
   const marker = `${stats.size}:${stats.mtimeMs}`;
@@ -275,6 +290,10 @@ export async function indexFile(filePath: string) {
     labelStatus,
     labelReason,
   };
+  if (!(await isApprovedFile(filePath))) {
+    await repository.deleteByPath(filePath);
+    return;
+  }
   await repository.upsertFile(file);
   await repository.upsertChunks(fileId, chunks);
 }
@@ -315,6 +334,11 @@ function buildMetadataContext(metadata: FileMetadata): string {
 async function approvedRootFor(filePath: string): Promise<string> {
   const folders = await repository.getFolders();
   return folders.find((folder) => isWithinFolder(filePath, folder.path))?.path ?? path.dirname(filePath);
+}
+
+async function isApprovedFile(filePath: string): Promise<boolean> {
+  const folders = await repository.getFolders();
+  return folders.some((folder) => isWithinFolder(filePath, folder.path));
 }
 
 function isWithinFolder(filePath: string, folderPath: string): boolean {
