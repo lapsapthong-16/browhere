@@ -4,6 +4,16 @@ import React from "react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { IndexStatus, SearchResponse } from "@/lib/types";
 
+const examples = ["receipt from oak market", "deck with retention chart", "photo of yellow packaging"];
+
+function formatCount(value: number | undefined) {
+  return new Intl.NumberFormat("en", { notation: "compact" }).format(value ?? 0);
+}
+
+function formatScore(value: number) {
+  return `${Math.round(value * 1000) / 10}%`;
+}
+
 export default function HomePage() {
   const [query, setQuery] = useState("");
   const [folderPath, setFolderPath] = useState("");
@@ -85,58 +95,115 @@ export default function HomePage() {
 
   const providerLabel = useMemo(() => {
     if (!status) return "Checking providers";
-    return `Gemini ${status.providers.geminiReady ? "ready" : "missing"} | Groq ${
+    return `Gemini ${status.providers.geminiReady ? "ready" : "missing"} / Groq ${
       status.providers.groqReady ? "ready" : "missing"
     }`;
   }, [status]);
 
+  const totalWork = (status?.queuedCount ?? 0) + (status?.processingCount ?? 0);
+  const hasFolders = Boolean(status?.folders.length);
+  const state = status?.state ?? "loading";
+
   return (
     <main className="shell">
-      <section className="searchPanel" aria-labelledby="app-title">
-        <div className="titleRow">
-          <div>
-            <p className="kicker">Local RAG Search</p>
-            <h1 id="app-title">Find files by memory</h1>
-          </div>
-          <span className="statePill">{status?.state ?? "loading"}</span>
+      <section className="heroPanel" aria-labelledby="app-title">
+        <div className="heroCopy">
+          <p className="kicker">Local RAG Search</p>
+          <h1 id="app-title">Find files by memory</h1>
+          <p className="lede">
+            Ask in plain language across approved folders. Browhere ranks documents, images, and metadata with
+            local index context.
+          </p>
         </div>
 
+        <div className="signalBoard" aria-label="Index overview">
+          <div className="signalBoardHeader">
+            <span className={`statePill state-${state}`}>{state}</span>
+            <span>{providerLabel}</span>
+          </div>
+          <div className="metricStack">
+            <div>
+              <strong>{formatCount(status?.indexedFileCount)}</strong>
+              <span>files</span>
+            </div>
+            <div>
+              <strong>{formatCount(status?.indexedChunkCount)}</strong>
+              <span>chunks</span>
+            </div>
+            <div>
+              <strong>{formatCount(totalWork)}</strong>
+              <span>active</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="searchPanel" aria-label="Search workspace">
         <form className="searchForm" onSubmit={submitSearch}>
-          <input
-            aria-label="Search files"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="mcdonalds image, document about lizards..."
-          />
-          <button disabled={busy || !query.trim()} type="submit">
-            Search
+          <label>
+            <span>Search memory</span>
+            <input
+              aria-label="Search files"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="mcdonalds image, document about lizards..."
+            />
+          </label>
+          <button className="primaryButton" disabled={busy || !query.trim()} type="submit">
+            {busy ? "Working" : "Search"}
           </button>
         </form>
 
+        <div className="promptRail" aria-label="Example searches">
+          {examples.map((example) => (
+            <button key={example} onClick={() => setQuery(example)} type="button">
+              {example}
+            </button>
+          ))}
+        </div>
+
         <p className="statusLine" aria-live="polite">
-          {message} {providerLabel}.
+          {message}
         </p>
 
         <div className="results" aria-label="Search results">
-          {search?.results.length ? (
+          {busy ? (
+            Array.from({ length: 3 }, (_, index) => (
+              <div className="result skeletonResult" key={index}>
+                <span />
+                <span />
+                <span />
+              </div>
+            ))
+          ) : search?.results.length ? (
             search.results.map((result) => (
               <article className="result" key={result.id}>
-                <div>
-                  <strong>
+                <div className="resultHeader">
+                  <strong className="resultTitle">
                     {result.rank}. {result.displayName}
                   </strong>
-                  <span>{result.filePath}</span>
+                  <span className="score">{formatScore(result.score)}</span>
                 </div>
+                <span className="filePath">{result.filePath}</span>
                 <p>{result.matchContext.text}</p>
-                <small>
-                  {result.fileType} | {result.readiness} | evidence {result.matchContext.kind} | score{" "}
-                  {result.score.toFixed(3)}
-                </small>
+                <div className="resultMeta">
+                  <span>{result.fileType}</span>
+                  <span>{result.readiness}</span>
+                  <span>evidence {result.matchContext.kind}</span>
+                </div>
               </article>
             ))
           ) : search ? (
-            <p className="empty">No matching files found.</p>
-          ) : null}
+            <div className="empty">
+              <strong>No matching files found.</strong>
+              <span>Try a visual detail, filename fragment, or phrase from a document.</span>
+            </div>
+          ) : (
+            <div className="empty initialEmpty">
+              <strong>Search is ready when your folders are.</strong>
+              <span>Add an approved folder, then search by concept instead of exact filename.</span>
+            </div>
+          )}
         </div>
       </section>
 
@@ -149,13 +216,16 @@ export default function HomePage() {
         </div>
 
         <form className="folderForm" onSubmit={addIndexFolder}>
-          <input
-            aria-label="Folder path"
-            value={folderPath}
-            onChange={(event) => setFolderPath(event.target.value)}
-            placeholder="/Users/name/Documents"
-          />
-          <button disabled={busy || !folderPath.trim()} type="submit">
+          <label>
+            <span>Folder path</span>
+            <input
+              aria-label="Folder path"
+              value={folderPath}
+              onChange={(event) => setFolderPath(event.target.value)}
+              placeholder="/Users/name/Documents"
+            />
+          </label>
+          <button className="secondaryButton" disabled={busy || !folderPath.trim()} type="submit">
             Add
           </button>
         </form>
@@ -165,13 +235,13 @@ export default function HomePage() {
             status.folders.map((folder) => (
               <li key={folder.path}>
                 <span>{folder.path}</span>
-                <button disabled={busy} onClick={() => void removeIndexFolder(folder.path)} type="button">
+                <button className="ghostButton" disabled={busy} onClick={() => void removeIndexFolder(folder.path)} type="button">
                   Remove
                 </button>
               </li>
             ))
           ) : (
-            <li>No folders approved.</li>
+            <li className="folderEmpty">No folders approved.</li>
           )}
         </ul>
 
@@ -187,6 +257,13 @@ export default function HomePage() {
         {status?.currentFilePath ? <p className="statusLine">Indexing {status.currentFilePath}</p> : null}
         {status?.lastIndexedAt ? (
           <p className="statusLine">Last indexed {new Date(status.lastIndexedAt).toLocaleString()}</p>
+        ) : null}
+
+        {!hasFolders ? (
+          <div className="setupHint">
+            <strong>Start with one narrow folder.</strong>
+            <span>Smaller scopes make the first index easier to verify before adding larger archives.</span>
+          </div>
         ) : null}
 
         {status?.failures.length ? (
