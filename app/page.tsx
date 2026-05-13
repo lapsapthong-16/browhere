@@ -2,9 +2,7 @@
 
 import React from "react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import type { IndexStatus, SearchResponse } from "@/lib/types";
-
-const examples = ["receipt from oak market", "deck with retention chart", "photo of yellow packaging"];
+import type { IndexedDocumentLog, IndexStatus, SearchResponse } from "@/lib/types";
 
 function formatScore(value: number) {
   return `${Math.round(value * 1000) / 10}%`;
@@ -26,6 +24,15 @@ function sourceLabel(kind: string) {
   if (kind === "imageLabel") return "image label";
   if (kind === "extractedText") return "text";
   return kind;
+}
+
+function labelState(document: IndexedDocumentLog) {
+  if (!["png", "jpg", "jpeg"].includes(document.fileType)) return "Not image";
+  if (document.labelStatus === "generated" && document.labelEmbedded) return "Label embedded";
+  if (document.labelStatus === "generated") return "Label ready";
+  if (document.labelStatus === "pending" || document.labelStatus === "retrying") return "Label pending";
+  if (document.labelStatus === "failed") return "Label failed";
+  return "No label";
 }
 
 export default function HomePage() {
@@ -147,14 +154,6 @@ export default function HomePage() {
             </button>
           </form>
 
-        <div className="promptRail" aria-label="Example searches">
-          {examples.map((example) => (
-            <button key={example} onClick={() => setQuery(example)} type="button">
-              {example}
-            </button>
-          ))}
-        </div>
-
         <p className="statusLine" aria-live="polite">
           {message}
         </p>
@@ -171,9 +170,6 @@ export default function HomePage() {
           ) : search?.results.length ? (
             search.results.map((result) => (
               <article className="result resultRow" key={result.id}>
-                <div className="fileMark" aria-hidden="true">
-                  {result.fileType.slice(0, 3).toUpperCase()}
-                </div>
                 <div className="resultBody">
                   <div className="resultHeader">
                     <strong className="resultTitle">{result.displayName}</strong>
@@ -301,6 +297,7 @@ export default function HomePage() {
                     <tr>
                       <th>Document</th>
                       <th>Folder</th>
+                      <th>Image label</th>
                       <th>Indexed</th>
                       <th>Chunks</th>
                     </tr>
@@ -313,6 +310,11 @@ export default function HomePage() {
                           <span>{document.filePath}</span>
                         </td>
                         <td>{document.folderPath}</td>
+                        <td>
+                          <span className={`labelState labelState-${document.labelStatus ?? "none"}`}>
+                            {labelState(document)}
+                          </span>
+                        </td>
                         <td>{formatIndexedAt(document.indexedAt)}</td>
                         <td>{document.chunkCount}</td>
                       </tr>

@@ -236,8 +236,7 @@ h2 {
 
 .primaryButton,
 .secondaryButton,
-.ghostButton,
-.promptRail button {
+.ghostButton {
   min-height: 44px;
   border-radius: 999px;
   font-weight: 760;
@@ -264,8 +263,7 @@ h2 {
   box-shadow: 0 18px 38px -32px rgba(35, 74, 67, 0.9);
 }
 
-.ghostButton,
-.promptRail button {
+.ghostButton {
   background: rgba(255, 255, 255, 0.7);
   color: var(--muted);
   box-shadow: inset 0 0 0 1px var(--line);
@@ -275,23 +273,6 @@ h2 {
   min-height: 34px;
   padding: 0 0.78rem;
   color: var(--danger);
-}
-
-.promptRail {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.55rem;
-}
-
-.promptRail button {
-  min-height: 34px;
-  padding: 0 0.9rem;
-  font-size: 0.86rem;
-}
-
-.promptRail button:hover {
-  color: var(--accent-ink);
-  transform: translateY(-1px);
 }
 
 .statusLine,
@@ -326,8 +307,7 @@ h2 {
 
 .resultRow {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
-  gap: 0.95rem;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   padding: 1rem 1.1rem;
   animation: riseIn 620ms var(--curve) both;
@@ -339,22 +319,6 @@ h2 {
 
 .resultRow:hover {
   background: #f6f7f4;
-}
-
-.fileMark {
-  display: grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  border-radius: 15px;
-  background:
-    linear-gradient(150deg, rgba(49, 95, 86, 0.16), rgba(255, 255, 255, 0.85)),
-    #eef3f0;
-  color: var(--accent-ink);
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  font-weight: 780;
-  box-shadow: inset 0 0 0 1px rgba(49, 95, 86, 0.12);
 }
 
 .resultBody {
@@ -623,7 +587,7 @@ h2 {
 
 .logTable {
   width: 100%;
-  min-width: 760px;
+  min-width: 860px;
   border-collapse: collapse;
 }
 
@@ -652,7 +616,7 @@ h2 {
   width: 34%;
 }
 
-.logTable td:nth-child(4) {
+.logTable td:nth-child(5) {
   width: 90px;
   font-family: var(--font-mono);
 }
@@ -673,6 +637,37 @@ h2 {
   font-family: var(--font-mono);
   font-size: 0.74rem;
   overflow-wrap: anywhere;
+}
+
+.logTable .labelState {
+  display: inline-flex;
+  margin-top: 0;
+  min-height: 24px;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 760;
+}
+
+.logTable .labelState-generated {
+  background: rgba(219, 237, 229, 0.9);
+  color: var(--accent-ink);
+}
+
+.logTable .labelState-pending,
+.logTable .labelState-retrying {
+  background: rgba(246, 238, 207, 0.92);
+  color: #73621d;
+}
+
+.logTable .labelState-failed {
+  background: rgba(245, 222, 218, 0.92);
+  color: var(--danger);
 }
 
 .logEmpty {
