@@ -8,6 +8,7 @@ import type {
   FileMetadata,
   IndexedFileRecord,
   IndexedFolder,
+  IndexedDocumentLog,
   IndexFailure,
   RecordKind,
 } from "@/lib/types";
@@ -22,6 +23,8 @@ interface Metadata {
   schemaVersion: number;
   folders: IndexedFolder[];
   failures: IndexFailure[];
+  documents: IndexedDocumentLog[];
+  documentLogInitialized: boolean;
   skippedCount: number;
   unsupportedCount: number;
   lastIndexedAt?: number;
@@ -31,6 +34,8 @@ const DEFAULT_METADATA: Metadata = {
   schemaVersion: 1,
   folders: [],
   failures: [],
+  documents: [],
+  documentLogInitialized: false,
   skippedCount: 0,
   unsupportedCount: 0,
 };
@@ -69,6 +74,7 @@ export class IndexRepository {
     const normalized = path.resolve(folderPath);
     const metadata = await this.readMetadata();
     metadata.folders = metadata.folders.filter((folder) => folder.path !== normalized);
+    metadata.documents = metadata.documents.filter((document) => !isWithinFolder(document.filePath, normalized));
     await this.writeMetadata(metadata);
     await this.deleteByFolder(normalized);
   }
@@ -90,21 +96,28 @@ export class IndexRepository {
     if (table) {
       await this.ensureStringColumns(table, FILE_STRING_COLUMNS);
       await table.add([normalizeFileRow(file) as unknown as IndexedFileRecord]);
+      await this.recordDocument(file);
       return;
     }
     await this.createTable(FILES_TABLE, [normalizeFileRow(file) as unknown as IndexedFileRecord]);
+    await this.recordDocument(file);
   }
 
   async upsertChunks(fileId: string, chunks: ChunkRecord[]) {
     await this.deleteChunksForFile(fileId);
-    if (chunks.length === 0) return;
+    if (chunks.length === 0) {
+      await this.updateDocumentChunkCount(fileId, 0);
+      return;
+    }
     const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
     if (table) {
       await this.ensureStringColumns(table, CHUNK_STRING_COLUMNS);
       await table.add(chunks.map((chunk) => normalizeChunkRow(chunk) as unknown as ChunkRecord));
+      await this.updateDocumentChunkCount(fileId, chunks.length);
       return;
     }
     await this.createTable(CHUNKS_TABLE, chunks.map((chunk) => normalizeChunkRow(chunk) as unknown as ChunkRecord));
+    await this.updateDocumentChunkCount(fileId, chunks.length);
   }
 
   async getChunksForFile(fileId: string): Promise<ChunkRecord[]> {
@@ -120,6 +133,7 @@ export class IndexRepository {
       await table.delete(`id = '${escapeSql(fileId)}'`);
     }
     await this.deleteChunksForFile(fileId);
+    await this.deleteDocumentLog(fileId);
   }
 
   async deleteByPath(filePath: string) {
@@ -150,7 +164,9 @@ export class IndexRepository {
     await this.pruneUnapprovedRecords();
     const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
     if (!table) return [];
-    const rows = (await table.search(vector).limit(limit).toArray()) as Array<ChunkRecord & { _distance?: number }>;
+    const rows = (await table.search(vector).nprobes(20).limit(limit).toArray()) as Array<
+      ChunkRecord & { _distance?: number }
+    >;
     return rows.map((row) => ({
       ...normalizeChunkRecord(row),
       score: typeof row._distance === "number" ? 1 / (1 + row._distance) : 0,
@@ -158,27 +174,29 @@ export class IndexRepository {
   }
 
   async getCounts() {
-    await this.pruneUnapprovedRecords();
-    const files = await this.getFiles();
-    const chunksTable = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
-    const chunks = chunksTable ? await chunksTable.countRows() : 0;
     const metadata = await this.readMetadata();
+    const documents = await this.getApprovedDocumentLogs(metadata);
     return {
-      files: files.length,
-      chunks,
-      failed: files.filter((file) => file.status === "failed").length,
-      partial: files.filter((file) => file.status === "partial").length,
+      files: documents.length,
+      chunks: documents.reduce((total, document) => total + document.chunkCount, 0),
+      failed: documents.filter((document) => document.status === "failed").length,
+      partial: documents.filter((document) => document.status === "partial").length,
       skipped: metadata.skippedCount,
       unsupported: metadata.unsupportedCount,
-      failures: metadata.failures,
+      failures: [],
       lastIndexedAt: metadata.lastIndexedAt,
+      documents,
     };
   }
 
-  async recordFailure(filePath: string, message: string) {
+  async recordFailure(_filePath: string, _message: string) {
+    await this.clearFailures();
+  }
+
+  async clearFailures() {
     const metadata = await this.readMetadata();
-    metadata.failures.unshift({ filePath, message, at: Date.now() });
-    metadata.failures = metadata.failures.slice(0, 50);
+    if (metadata.failures.length === 0) return;
+    metadata.failures = [];
     await this.writeMetadata(metadata);
   }
 
@@ -193,6 +211,83 @@ export class IndexRepository {
     const metadata = await this.readMetadata();
     metadata.lastIndexedAt = value;
     await this.writeMetadata(metadata);
+  }
+
+  private async recordDocument(file: IndexedFileRecord) {
+    const metadata = await this.readMetadata();
+    const folders = metadata.folders;
+    const folderPath =
+      file.metadata?.approvedFolderRoot ??
+      folders.find((folder) => isWithinFolder(file.path, folder.path))?.path ??
+      path.dirname(file.path);
+    const document: IndexedDocumentLog = {
+      id: file.id,
+      displayName: file.displayName,
+      filePath: file.path,
+      folderPath,
+      indexedAt: file.indexedAt ?? Date.now(),
+      chunkCount: file.chunkCount,
+      status: file.status,
+    };
+    metadata.documents = [
+      document,
+      ...metadata.documents.filter((existing) => existing.id !== file.id && existing.filePath !== file.path),
+    ].sort((left, right) => right.indexedAt - left.indexedAt);
+    metadata.documentLogInitialized = true;
+    await this.writeMetadata(metadata);
+  }
+
+  private async deleteDocumentLog(fileId: string) {
+    const metadata = await this.readMetadata();
+    const nextDocuments = metadata.documents.filter((document) => document.id !== fileId);
+    if (nextDocuments.length === metadata.documents.length) return;
+    metadata.documents = nextDocuments;
+    await this.writeMetadata(metadata);
+  }
+
+  private async updateDocumentChunkCount(fileId: string, chunkCount: number) {
+    const metadata = await this.readMetadata();
+    const document = metadata.documents.find((entry) => entry.id === fileId);
+    if (!document || document.chunkCount === chunkCount) return;
+    document.chunkCount = chunkCount;
+    await this.writeMetadata(metadata);
+  }
+
+  private async getApprovedDocumentLogs(metadata: Metadata): Promise<IndexedDocumentLog[]> {
+    if (metadata.documentLogInitialized) {
+      return this.pruneDocumentLogs(metadata);
+    }
+
+    const files = await this.getFiles();
+    metadata.documents = files
+      .filter((file) => file.status === "indexed" || file.status === "partial" || file.status === "failed")
+      .map((file) => ({
+        id: file.id,
+        displayName: file.displayName,
+        filePath: file.path,
+        folderPath:
+          file.metadata?.approvedFolderRoot ??
+          metadata.folders.find((folder) => isWithinFolder(file.path, folder.path))?.path ??
+          path.dirname(file.path),
+        indexedAt: file.indexedAt ?? file.metadata?.indexedAt ?? Date.now(),
+        chunkCount: file.chunkCount,
+        status: file.status,
+      }))
+      .sort((left, right) => right.indexedAt - left.indexedAt);
+    metadata.documentLogInitialized = true;
+    await this.writeMetadata(metadata);
+    return this.pruneDocumentLogs(metadata);
+  }
+
+  private async pruneDocumentLogs(metadata: Metadata): Promise<IndexedDocumentLog[]> {
+    const approved = metadata.documents.filter((document) =>
+      metadata.folders.some((folder) => isWithinFolder(document.filePath, folder.path)),
+    );
+    if (approved.length !== metadata.documents.length) {
+      metadata.documents = approved;
+      await this.writeMetadata(metadata);
+    }
+    return approved;
   }
 
   async pruneUnapprovedRecords() {
@@ -246,7 +341,7 @@ export class IndexRepository {
       add(rows: T[]): Promise<void>;
       delete(predicate: string): Promise<void>;
       query(): { limit(count: number): { toArray(): Promise<unknown[]> } };
-      search(vector: number[]): { limit(count: number): { toArray(): Promise<unknown[]> } };
+      search(vector: number[]): { nprobes(count: number): { limit(count: number): { toArray(): Promise<unknown[]> } } };
       countRows(): Promise<number>;
       schema(): Promise<{ fields: Array<{ name: string }> }>;
       addColumns(columns: Array<{ name: string; valueSql: string }>): Promise<unknown>;
@@ -277,7 +372,9 @@ export class IndexRepository {
     const filePath = path.join(this.indexDir, META_FILE);
     try {
       const text = await fs.readFile(filePath, "utf8");
-      return { ...DEFAULT_METADATA, ...JSON.parse(text) };
+      const metadata = { ...DEFAULT_METADATA, ...JSON.parse(text), failures: [] };
+      await this.writeMetadata(metadata);
+      return metadata;
     } catch {
       await this.writeMetadata(DEFAULT_METADATA);
       return { ...DEFAULT_METADATA };

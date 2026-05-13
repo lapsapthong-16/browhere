@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import HomePage from "@/app/page";
 
 describe("HomePage", () => {
-  it("shows search, folder controls, and privacy copy", async () => {
+  it("shows search and folder controls", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({
@@ -20,6 +20,7 @@ describe("HomePage", () => {
           failedCount: 0,
           unsupportedCount: 0,
           failures: [],
+          documents: [],
           message: "Add a folder.",
           providers: { geminiReady: false, groqReady: false },
         }),
@@ -28,9 +29,9 @@ describe("HomePage", () => {
 
     render(<HomePage />);
 
-    expect(await screen.findByRole("heading", { name: "Find files by memory" })).toBeVisible();
+    expect(await screen.findByLabelText("Search files")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Approved folders" })).toBeVisible();
-    expect(screen.getByText(/Selected-folder text/)).toBeVisible();
+    expect(screen.getByLabelText("Folder path")).toBeVisible();
     vi.unstubAllGlobals();
   });
 });

@@ -6,12 +6,17 @@ import type { IndexStatus, SearchResponse } from "@/lib/types";
 
 const examples = ["receipt from oak market", "deck with retention chart", "photo of yellow packaging"];
 
-function formatCount(value: number | undefined) {
-  return new Intl.NumberFormat("en", { notation: "compact" }).format(value ?? 0);
-}
-
 function formatScore(value: number) {
   return `${Math.round(value * 1000) / 10}%`;
+}
+
+function formatIndexedAt(value: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 export default function HomePage() {
@@ -100,59 +105,32 @@ export default function HomePage() {
     }`;
   }, [status]);
 
-  const totalWork = (status?.queuedCount ?? 0) + (status?.processingCount ?? 0);
   const hasFolders = Boolean(status?.folders.length);
   const state = status?.state ?? "loading";
 
   return (
     <main className="shell">
-      <section className="heroPanel" aria-labelledby="app-title">
-        <div className="heroCopy">
-          <p className="kicker">Local RAG Search</p>
-          <h1 id="app-title">Find files by memory</h1>
-          <p className="lede">
-            Ask in plain language across approved folders. Browhere ranks documents, images, and metadata with
-            local index context.
-          </p>
-        </div>
-
-        <div className="signalBoard" aria-label="Index overview">
-          <div className="signalBoardHeader">
-            <span className={`statePill state-${state}`}>{state}</span>
-            <span>{providerLabel}</span>
-          </div>
-          <div className="metricStack">
-            <div>
-              <strong>{formatCount(status?.indexedFileCount)}</strong>
-              <span>files</span>
-            </div>
-            <div>
-              <strong>{formatCount(status?.indexedChunkCount)}</strong>
-              <span>chunks</span>
-            </div>
-            <div>
-              <strong>{formatCount(totalWork)}</strong>
-              <span>active</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="searchPanel" aria-label="Search workspace">
-        <form className="searchForm" onSubmit={submitSearch}>
-          <label>
-            <span>Search memory</span>
-            <input
-              aria-label="Search files"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="mcdonalds image, document about lizards..."
-            />
-          </label>
-          <button className="primaryButton" disabled={busy || !query.trim()} type="submit">
-            {busy ? "Working" : "Search"}
-          </button>
-        </form>
+      <section className="searchPanel surfaceShell" aria-label="Search workspace">
+        <div className="surfaceCore searchCore">
+          <h1 id="app-title" className="srOnly">
+            Find files by memory
+          </h1>
+          <form className="searchForm" onSubmit={submitSearch}>
+            <label>
+              <div className="spotlightInput">
+                <span aria-hidden="true" className="searchGlyph" />
+                <input
+                  aria-label="Search files"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search files, images, receipts, documents..."
+                />
+              </div>
+            </label>
+            <button className="primaryButton" disabled={busy || !query.trim()} type="submit">
+              {busy ? "Working" : "Search"}
+            </button>
+          </form>
 
         <div className="promptRail" aria-label="Example searches">
           {examples.map((example) => (
@@ -166,10 +144,10 @@ export default function HomePage() {
           {message}
         </p>
 
-        <div className="results" aria-label="Search results">
+        <div className="results spotlightResults" aria-label="Search results">
           {busy ? (
             Array.from({ length: 3 }, (_, index) => (
-              <div className="result skeletonResult" key={index}>
+              <div className="result resultRow skeletonResult" key={index}>
                 <span />
                 <span />
                 <span />
@@ -177,19 +155,22 @@ export default function HomePage() {
             ))
           ) : search?.results.length ? (
             search.results.map((result) => (
-              <article className="result" key={result.id}>
-                <div className="resultHeader">
-                  <strong className="resultTitle">
-                    {result.rank}. {result.displayName}
-                  </strong>
-                  <span className="score">{formatScore(result.score)}</span>
+              <article className="result resultRow" key={result.id}>
+                <div className="fileMark" aria-hidden="true">
+                  {result.fileType.slice(0, 3).toUpperCase()}
                 </div>
-                <span className="filePath">{result.filePath}</span>
-                <p>{result.matchContext.text}</p>
-                <div className="resultMeta">
-                  <span>{result.fileType}</span>
-                  <span>{result.readiness}</span>
-                  <span>evidence {result.matchContext.kind}</span>
+                <div className="resultBody">
+                  <div className="resultHeader">
+                    <strong className="resultTitle">{result.displayName}</strong>
+                    <span className="score">{formatScore(result.score)}</span>
+                  </div>
+                  <span className="filePath">{result.filePath}</span>
+                  <p>{result.matchContext.text}</p>
+                  <div className="resultMeta">
+                    <span>#{result.rank}</span>
+                    <span>{result.readiness}</span>
+                    <span>{result.matchContext.kind}</span>
+                  </div>
                 </div>
               </article>
             ))
@@ -205,82 +186,135 @@ export default function HomePage() {
             </div>
           )}
         </div>
+        </div>
       </section>
 
-      <section className="indexPanel" aria-labelledby="index-title">
-        <div className="titleRow">
-          <div>
-            <p className="kicker">Index</p>
-            <h2 id="index-title">Approved folders</h2>
+      <section className="indexPanel surfaceShell" aria-labelledby="index-title">
+        <div className="surfaceCore indexCore">
+          <div className="titleRow">
+            <div>
+              <p className="kicker">Index</p>
+              <h2 id="index-title">Approved folders</h2>
+            </div>
+            <span className={`statePill state-${state}`}>{state}</span>
           </div>
-        </div>
 
-        <form className="folderForm" onSubmit={addIndexFolder}>
-          <label>
-            <span>Folder path</span>
-            <input
-              aria-label="Folder path"
-              value={folderPath}
-              onChange={(event) => setFolderPath(event.target.value)}
-              placeholder="/Users/name/Documents"
-            />
-          </label>
-          <button className="secondaryButton" disabled={busy || !folderPath.trim()} type="submit">
-            Add
-          </button>
-        </form>
+          <div className="providerLine">{providerLabel}</div>
 
-        <ul className="folders">
-          {status?.folders.length ? (
-            status.folders.map((folder) => (
-              <li key={folder.path}>
-                <span>{folder.path}</span>
-                <button className="ghostButton" disabled={busy} onClick={() => void removeIndexFolder(folder.path)} type="button">
-                  Remove
-                </button>
-              </li>
-            ))
-          ) : (
-            <li className="folderEmpty">No folders approved.</li>
-          )}
-        </ul>
-
-        <div className="stats">
-          <span>Files {status?.indexedFileCount ?? 0}</span>
-          <span>Chunks {status?.indexedChunkCount ?? 0}</span>
-          <span>Queued {status?.queuedCount ?? 0}</span>
-          <span>Failed {status?.failedCount ?? 0}</span>
-          <span>Partial {status?.partialCount ?? 0}</span>
-          <span>Skipped {status?.skippedCount ?? 0}</span>
-        </div>
-
-        {status?.currentFilePath ? <p className="statusLine">Indexing {status.currentFilePath}</p> : null}
-        {status?.lastIndexedAt ? (
-          <p className="statusLine">Last indexed {new Date(status.lastIndexedAt).toLocaleString()}</p>
-        ) : null}
-
-        {!hasFolders ? (
-          <div className="setupHint">
-            <strong>Start with one narrow folder.</strong>
-            <span>Smaller scopes make the first index easier to verify before adding larger archives.</span>
+          <div className="stats" aria-label="Index statistics">
+            <div>
+              <strong>{status?.indexedFileCount ?? 0}</strong>
+              <span>Files</span>
+            </div>
+            <div>
+              <strong>{status?.indexedChunkCount ?? 0}</strong>
+              <span>Chunks</span>
+            </div>
+            <div>
+              <strong>{status?.queuedCount ?? 0}</strong>
+              <span>Queued</span>
+            </div>
+            <div>
+              <strong>{status?.failedCount ?? 0}</strong>
+              <span>Failed</span>
+            </div>
+            <div>
+              <strong>{status?.partialCount ?? 0}</strong>
+              <span>Partial</span>
+            </div>
+            <div>
+              <strong>{status?.skippedCount ?? 0}</strong>
+              <span>Skipped</span>
+            </div>
           </div>
-        ) : null}
 
-        {status?.failures.length ? (
-          <ul className="failures">
-            {status.failures.slice(0, 5).map((failure) => (
-              <li key={`${failure.filePath}-${failure.at}`}>
-                <strong>{failure.filePath}</strong>
-                <span>{failure.message}</span>
-              </li>
-            ))}
+          <form className="folderForm" onSubmit={addIndexFolder}>
+            <label>
+              <span>Folder path</span>
+              <input
+                aria-label="Folder path"
+                value={folderPath}
+                onChange={(event) => setFolderPath(event.target.value)}
+                placeholder="/Users/name/Documents"
+              />
+            </label>
+            <button className="secondaryButton" disabled={busy || !folderPath.trim()} type="submit">
+              Add
+            </button>
+          </form>
+
+          <ul className="folders">
+            {status?.folders.length ? (
+              status.folders.map((folder) => (
+                <li key={folder.path}>
+                  <span className="folderPath">{folder.path}</span>
+                  <button
+                    className="ghostButton"
+                    disabled={busy}
+                    onClick={() => void removeIndexFolder(folder.path)}
+                    type="button"
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))
+            ) : (
+              <li className="folderEmpty">No folders approved.</li>
+            )}
           </ul>
-        ) : null}
 
-        <p className="privacy">
-          Selected-folder text, documents, and images are sent to Gemini for embeddings.
-          Search queries plus candidate snippets and metadata are sent to Groq when reranking is available.
-        </p>
+          {status?.currentFilePath ? <p className="statusLine">Indexing {status.currentFilePath}</p> : null}
+          {status?.lastIndexedAt ? (
+            <p className="statusLine">Last indexed {new Date(status.lastIndexedAt).toLocaleString()}</p>
+          ) : null}
+
+          <details className="documentLog">
+            <summary>
+              <span>
+                <strong>Indexed documents</strong>
+                <small>{status?.documents.length ?? 0} records</small>
+              </span>
+              <span className="chevron" aria-hidden="true" />
+            </summary>
+
+            {status?.documents.length ? (
+              <div className="logTableWrap">
+                <table className="logTable">
+                  <thead>
+                    <tr>
+                      <th>Document</th>
+                      <th>Folder</th>
+                      <th>Indexed</th>
+                      <th>Chunks</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {status.documents.map((document) => (
+                      <tr key={`${document.id}-${document.indexedAt}`}>
+                        <td>
+                          <strong>{document.displayName}</strong>
+                          <span>{document.filePath}</span>
+                        </td>
+                        <td>{document.folderPath}</td>
+                        <td>{formatIndexedAt(document.indexedAt)}</td>
+                        <td>{document.chunkCount}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="logEmpty">No indexed documents yet.</div>
+            )}
+          </details>
+
+          {!hasFolders ? (
+            <div className="setupHint">
+              <strong>Start with one narrow folder.</strong>
+              <span>Smaller scopes make the first index easier to verify before adding larger archives.</span>
+            </div>
+          ) : null}
+        </div>
       </section>
     </main>
   );

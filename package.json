@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "RUST_LOG=lance::dataset::scanner=error next dev",
     "build": "next build",
     "start": "next start",
     "test": "vitest run",

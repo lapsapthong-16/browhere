@@ -70,6 +70,16 @@ export interface IndexFailure {
   at: number;
 }
 
+export interface IndexedDocumentLog {
+  id: string;
+  displayName: string;
+  filePath: string;
+  folderPath: string;
+  indexedAt: number;
+  chunkCount: number;
+  status: FileStatus;
+}
+
 export interface IndexStatus {
   state: IndexState;
   folders: IndexedFolder[];
@@ -84,6 +94,7 @@ export interface IndexStatus {
   currentFilePath?: string;
   lastIndexedAt?: number;
   failures: IndexFailure[];
+  documents: IndexedDocumentLog[];
   message: string;
   providers: {
     geminiReady: boolean;

@@ -28,6 +28,7 @@ export class IndexRuntimeState {
       currentFilePath: this.currentFilePath,
       lastIndexedAt: counts.lastIndexedAt,
       failures: counts.failures,
+      documents: counts.documents,
       providers: {
         geminiReady: Boolean(getGeminiConfig().apiKey),
         groqReady: Boolean(getGroqConfig().apiKey),
