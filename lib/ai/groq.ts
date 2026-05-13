@@ -24,7 +24,7 @@ export class GroqClient {
     if (!config.apiKey || candidates.length === 0) return candidates;
     const parsed = await this.chatJson({
       system:
-        "Return JSON only. Rerank candidate file results for query. Output {results:[{id,reason}]} using only provided ids.",
+        "Return JSON only. Rerank candidate file results for query. Output {results:[{id,reason}]} using only provided ids. Use contextSource to distinguish extracted text, AI image labels, raw image vectors, and metadata. Do not imply AI-generated labels are human-authored.",
       user: JSON.stringify({
         query,
         candidates: candidates.map((candidate) => ({
@@ -32,7 +32,10 @@ export class GroqClient {
           filePath: candidate.filePath,
           displayName: candidate.displayName,
           fileType: candidate.fileType,
+          contextSource: candidate.matchContext.kind,
+          contextSources: candidate.matchContext.sources ?? [candidate.matchContext.kind],
           snippet: candidate.matchContext.text.slice(0, 900),
+          metadata: candidate.metadata,
         })),
       }),
     });

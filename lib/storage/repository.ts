@@ -2,7 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as lancedb from "@lancedb/lancedb";
 import { getIndexDir } from "@/lib/config";
-import type { ChunkRecord, IndexedFileRecord, IndexedFolder, IndexFailure } from "@/lib/types";
+import type {
+  ChunkRecord,
+  ContextSource,
+  FileMetadata,
+  IndexedFileRecord,
+  IndexedFolder,
+  IndexFailure,
+  RecordKind,
+} from "@/lib/types";
 
 const FILES_TABLE = "files";
 const CHUNKS_TABLE = "chunks";
@@ -66,7 +74,8 @@ export class IndexRepository {
   async getFiles(): Promise<IndexedFileRecord[]> {
     const table = await this.openTable<IndexedFileRecord>(FILES_TABLE);
     if (!table) return [];
-    return (await table.query().limit(100_000).toArray()) as IndexedFileRecord[];
+    const rows = (await table.query().limit(100_000).toArray()) as IndexedFileRecord[];
+    return rows.map(normalizeFileRecord);
   }
 
   async findFile(filePath: string): Promise<IndexedFileRecord | undefined> {
@@ -77,10 +86,10 @@ export class IndexRepository {
     await this.deleteFile(file.id);
     const table = await this.openTable<IndexedFileRecord>(FILES_TABLE);
     if (table) {
-      await table.add([normalizeRow(file) as unknown as IndexedFileRecord]);
+      await table.add([normalizeFileRow(file) as unknown as IndexedFileRecord]);
       return;
     }
-    await this.createTable(FILES_TABLE, [normalizeRow(file) as unknown as IndexedFileRecord]);
+    await this.createTable(FILES_TABLE, [normalizeFileRow(file) as unknown as IndexedFileRecord]);
   }
 
   async upsertChunks(fileId: string, chunks: ChunkRecord[]) {
@@ -88,10 +97,17 @@ export class IndexRepository {
     if (chunks.length === 0) return;
     const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
     if (table) {
-      await table.add(chunks.map((chunk) => normalizeRow(chunk) as unknown as ChunkRecord));
+      await table.add(chunks.map((chunk) => normalizeChunkRow(chunk) as unknown as ChunkRecord));
       return;
     }
-    await this.createTable(CHUNKS_TABLE, chunks.map((chunk) => normalizeRow(chunk) as unknown as ChunkRecord));
+    await this.createTable(CHUNKS_TABLE, chunks.map((chunk) => normalizeChunkRow(chunk) as unknown as ChunkRecord));
+  }
+
+  async getChunksForFile(fileId: string): Promise<ChunkRecord[]> {
+    const table = await this.openTable<ChunkRecord>(CHUNKS_TABLE);
+    if (!table) return [];
+    const rows = (await table.query().limit(100_000).toArray()) as ChunkRecord[];
+    return rows.filter((row) => row.fileId === fileId).map(normalizeChunkRecord);
   }
 
   async deleteFile(fileId: string) {
@@ -130,7 +146,7 @@ export class IndexRepository {
     if (!table) return [];
     const rows = (await table.search(vector).limit(limit).toArray()) as Array<ChunkRecord & { _distance?: number }>;
     return rows.map((row) => ({
-      ...row,
+      ...normalizeChunkRecord(row),
       score: typeof row._distance === "number" ? 1 / (1 + row._distance) : 0,
     }));
   }
@@ -239,9 +255,85 @@ function normalizeRow<T>(row: T): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(row as Record<string, unknown>).map(([key, value]) => [
       key,
-      value === undefined ? "" : value,
+      value === undefined ? "" : key === "metadata" && value ? JSON.stringify(value) : value,
     ]),
   );
+}
+
+function normalizeFileRow(file: IndexedFileRecord): Record<string, unknown> {
+  return normalizeRow({
+    ...file,
+    metadata: file.metadata ?? "",
+    metadataContext: file.metadataContext ?? "",
+    labelStatus: file.labelStatus ?? "",
+    labelReason: file.labelReason ?? "",
+  });
+}
+
+function normalizeChunkRow(chunk: ChunkRecord): Record<string, unknown> {
+  const recordKind = normalizeRecordKind(chunk.recordKind, chunk.kind);
+  return normalizeRow({
+    ...chunk,
+    recordKind,
+    contextSource: normalizeContextSource(chunk.contextSource, recordKind),
+    metadata: chunk.metadata ?? "",
+    metadataContext: chunk.metadataContext ?? "",
+    provider: chunk.provider ?? "",
+    model: chunk.model ?? "",
+  });
+}
+
+function normalizeFileRecord(row: IndexedFileRecord): IndexedFileRecord {
+  return {
+    ...row,
+    metadata: parseMetadata(row.metadata),
+    metadataContext: row.metadataContext ?? "",
+    labelStatus:
+      row.labelStatus === "notApplicable" || row.labelStatus === "generated" || row.labelStatus === "failed"
+        ? row.labelStatus
+        : undefined,
+    labelReason: row.labelReason || undefined,
+  };
+}
+
+function normalizeChunkRecord(row: ChunkRecord): ChunkRecord {
+  const recordKind = normalizeRecordKind(row.recordKind, row.kind);
+  return {
+    ...row,
+    recordKind,
+    contextSource: normalizeContextSource(row.contextSource, recordKind),
+    metadata: parseMetadata(row.metadata),
+    metadataContext: row.metadataContext ?? "",
+  };
+}
+
+function parseMetadata(value: unknown): FileMetadata | undefined {
+  if (!value) return undefined;
+  if (typeof value === "object") return value as FileMetadata;
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed = JSON.parse(value) as FileMetadata;
+    return parsed && typeof parsed.displayName === "string" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeRecordKind(value: unknown, legacyKind: ChunkRecord["kind"]): RecordKind {
+  if (value === "text" || value === "rawImage" || value === "imageLabel" || value === "metadata") {
+    return value;
+  }
+  return legacyKind === "image" ? "rawImage" : "text";
+}
+
+function normalizeContextSource(value: unknown, recordKind: RecordKind): ContextSource {
+  if (value === "extractedText" || value === "rawImageVector" || value === "imageLabel" || value === "metadata") {
+    return value;
+  }
+  if (recordKind === "rawImage") return "rawImageVector";
+  if (recordKind === "imageLabel") return "imageLabel";
+  if (recordKind === "metadata") return "metadata";
+  return "extractedText";
 }
 
 function isWithinFolder(filePath: string, folderPath: string): boolean {

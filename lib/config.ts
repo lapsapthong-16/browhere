@@ -33,6 +33,7 @@ export function getGeminiConfig() {
       "https://generativelanguage.googleapis.com/v1beta",
     embeddingModel:
       process.env.BROWHERE_GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-2",
+    visionModel: process.env.BROWHERE_GEMINI_VISION_MODEL ?? "gemini-2.0-flash",
     dimensions: Number(
       process.env.BROWHERE_GEMINI_EMBEDDING_DIMENSIONS ??
         DEFAULT_VECTOR_DIMENSIONS,

@@ -27,4 +27,25 @@ describe("GeminiEmbeddingClient", () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
+
+  it("generates constrained image labels with the configured vision model", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "key");
+    vi.stubEnv("BROWHERE_GEMINI_VISION_MODEL", "gemini-test-vision");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ candidates: [{ content: { parts: [{ text: "Visible logo and red sign" }] } }] }),
+      })),
+    );
+
+    await expect(new GeminiEmbeddingClient().labelImage(Buffer.from([1]), "image/png")).resolves.toBe(
+      "Visible logo and red sign",
+    );
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain("gemini-test-vision:generateContent");
+    expect(String(init?.body)).toContain("Do not infer private facts");
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
 });

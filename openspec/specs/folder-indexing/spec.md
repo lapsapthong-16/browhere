@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Define how local folders are approved, discovered, watched, filtered, indexed, and reported to the user.
+
+## Requirements
 
 ### Requirement: Register Approved Folders
 The system SHALL allow the single local user to register and remove folders that are approved for indexing.

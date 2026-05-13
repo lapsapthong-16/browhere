@@ -23,6 +23,7 @@ export class IndexRuntimeState {
       indexedChunkCount: counts.chunks,
       skippedCount: counts.skipped,
       failedCount: counts.failed,
+      partialCount: counts.partial,
       unsupportedCount: counts.unsupported,
       currentFilePath: this.currentFilePath,
       lastIndexedAt: counts.lastIndexedAt,

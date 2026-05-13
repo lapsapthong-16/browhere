@@ -57,6 +57,42 @@ describe("IndexRepository", () => {
     expect(await repo.vectorSearch([0.1, 0.2, 0.3, 0.4], 5)).toHaveLength(1);
   });
 
+  it("normalizes old chunk rows without record kind or context source", async () => {
+    const file: IndexedFileRecord = {
+      id: "file-old",
+      path: "/tmp/docs/old.png",
+      displayName: "old.png",
+      fileType: "png",
+      sizeBytes: 10,
+      modifiedMs: 1,
+      contentMarker: "10:1",
+      status: "indexed",
+      indexedAt: 2,
+      chunkCount: 1,
+    };
+    const oldChunk: ChunkRecord = {
+      id: "file-old:0",
+      fileId: file.id,
+      filePath: file.path,
+      displayName: file.displayName,
+      fileType: file.fileType,
+      text: "old image fallback",
+      vector: [0.1, 0.2, 0.3, 0.4],
+      kind: "image",
+      status: "indexed",
+      modifiedMs: 1,
+      sizeBytes: 10,
+      indexedAt: 2,
+    };
+
+    await repo.upsertFile(file);
+    await repo.upsertChunks(file.id, [oldChunk]);
+
+    const [candidate] = await repo.vectorSearch([0.1, 0.2, 0.3, 0.4], 5);
+    expect(candidate.recordKind).toBe("rawImage");
+    expect(candidate.contextSource).toBe("rawImageVector");
+  });
+
   it("removes records when folder is removed without touching prefix siblings", async () => {
     await repo.addFolder("/tmp/docs");
     const file = {

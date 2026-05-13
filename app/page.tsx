@@ -129,7 +129,8 @@ export default function HomePage() {
                 </div>
                 <p>{result.matchContext.text}</p>
                 <small>
-                  {result.fileType} | {result.readiness} | score {result.score.toFixed(3)}
+                  {result.fileType} | {result.readiness} | evidence {result.matchContext.kind} | score{" "}
+                  {result.score.toFixed(3)}
                 </small>
               </article>
             ))
@@ -179,6 +180,7 @@ export default function HomePage() {
           <span>Chunks {status?.indexedChunkCount ?? 0}</span>
           <span>Queued {status?.queuedCount ?? 0}</span>
           <span>Failed {status?.failedCount ?? 0}</span>
+          <span>Partial {status?.partialCount ?? 0}</span>
           <span>Skipped {status?.skippedCount ?? 0}</span>
         </div>
 

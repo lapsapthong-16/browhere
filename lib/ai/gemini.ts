@@ -22,6 +22,52 @@ export class GeminiEmbeddingClient {
     ]);
   }
 
+  async labelImage(buffer: Buffer, mimeType: string): Promise<string> {
+    const config = getGeminiConfig();
+    if (!config.apiKey) {
+      throw new ProviderUnavailableError();
+    }
+
+    const response = await fetch(
+      `${config.endpoint}/models/${config.visionModel}:generateContent?key=${config.apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: IMAGE_LABEL_PROMPT },
+                { inlineData: { mimeType, data: buffer.toString("base64") } },
+              ],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 160,
+          },
+        }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Gemini image labeling failed: ${response.status} ${await response.text()}`);
+    }
+    const data = (await response.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = data.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text)
+      .filter((part): part is string => typeof part === "string")
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) {
+      throw new Error("Gemini image labeling returned no label.");
+    }
+    return text.slice(0, 900);
+  }
+
   private async embedParts(parts: GeminiPart[]): Promise<number[]> {
     const config = getGeminiConfig();
     if (!config.apiKey) {
@@ -53,3 +99,6 @@ export class GeminiEmbeddingClient {
 }
 
 export const gemini = new GeminiEmbeddingClient();
+
+export const IMAGE_LABEL_PROMPT =
+  "Describe only visible evidence in this image for file search. Include recognizable objects, logos, readable text, scene type, visual layout, and location-like clues when visible. If content is unclear, say so. Do not infer private facts or anything not visible. Keep it concise.";

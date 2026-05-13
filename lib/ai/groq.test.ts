@@ -54,7 +54,7 @@ function result(id: string, rank: number): SearchResult {
     fileType: "md",
     sizeBytes: 1,
     score: 1,
-    matchContext: { kind: "snippet", text: "snippet" },
+    matchContext: { kind: "extractedText", text: "snippet" },
     readiness: "ready",
   };
 }

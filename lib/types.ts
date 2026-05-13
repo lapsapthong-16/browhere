@@ -1,6 +1,23 @@
 export type IndexState = "notConfigured" | "ready" | "indexing" | "stale" | "failed";
 export type FileStatus = "indexed" | "new" | "changed" | "missing" | "failed" | "partial" | "unsupported";
-export type MatchKind = "snippet" | "caption" | "explanation";
+export type RecordKind = "text" | "rawImage" | "imageLabel" | "metadata";
+export type ContextSource = "extractedText" | "rawImageVector" | "imageLabel" | "metadata";
+export type MatchKind = ContextSource | "explanation";
+
+export interface FileMetadata {
+  displayName: string;
+  extension: string;
+  mediaType: string;
+  sizeBytes: number;
+  sizeClass: string;
+  modifiedMs: number;
+  modifiedDate: string;
+  approvedFolderRoot: string;
+  parentFolders: string[];
+  indexedAt: number;
+  imageWidth?: number;
+  imageHeight?: number;
+}
 
 export interface IndexedFolder {
   path: string;
@@ -19,6 +36,10 @@ export interface IndexedFileRecord {
   reason?: string;
   indexedAt?: number;
   chunkCount: number;
+  metadata?: FileMetadata;
+  metadataContext?: string;
+  labelStatus?: "notApplicable" | "generated" | "failed";
+  labelReason?: string;
 }
 
 export interface ChunkRecord {
@@ -30,11 +51,17 @@ export interface ChunkRecord {
   text: string;
   vector: number[];
   kind: "text" | "image";
+  recordKind?: RecordKind;
+  contextSource?: ContextSource;
   status: FileStatus;
   reason?: string;
   modifiedMs: number;
   sizeBytes: number;
   indexedAt: number;
+  metadata?: FileMetadata;
+  metadataContext?: string;
+  provider?: string;
+  model?: string;
 }
 
 export interface IndexFailure {
@@ -52,6 +79,7 @@ export interface IndexStatus {
   indexedChunkCount: number;
   skippedCount: number;
   failedCount: number;
+  partialCount: number;
   unsupportedCount: number;
   currentFilePath?: string;
   lastIndexedAt?: number;
@@ -74,7 +102,9 @@ export interface SearchResult {
   matchContext: {
     kind: MatchKind;
     text: string;
+    sources?: ContextSource[];
   };
+  metadata?: Pick<FileMetadata, "displayName" | "extension" | "mediaType" | "sizeBytes" | "modifiedDate" | "parentFolders" | "imageWidth" | "imageHeight">;
   readiness: "ready" | "partial";
 }
 

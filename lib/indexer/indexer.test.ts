@@ -47,7 +47,7 @@ describe("indexFile", () => {
     const repo = await getMockedRepository();
     const file = await repo.findFile(filePath);
     expect(file?.status).toBe("indexed");
-    expect(file?.chunkCount).toBe(1);
+    expect(file?.chunkCount).toBe(2);
   });
 
   it("tries raw image embedding and stores image chunk", async () => {
@@ -61,6 +61,93 @@ describe("indexFile", () => {
     const repo = await getMockedRepository();
     const file = await repo.findFile(filePath);
     expect(file?.fileType).toBe("jpeg");
+  });
+
+  it("stores image labels and metadata context without failing raw image indexing", async () => {
+    const filePath = path.join(root, "mcdonalds.png");
+    await fs.writeFile(
+      filePath,
+      Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 2, 0, 0, 0, 3,
+      ]),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("generateContent")) {
+          return {
+            ok: true,
+            json: async () => ({ candidates: [{ content: { parts: [{ text: "McDonald's logo on a sign" }] } }] }),
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({ embedding: { values: [0.1, 0.2, 0.3, 0.4] } }),
+        };
+      }),
+    );
+
+    await indexFile(filePath);
+
+    const repo = await getMockedRepository();
+    const file = await repo.findFile(filePath);
+    expect(file?.labelStatus).toBe("generated");
+    expect(file?.metadataContext).toContain("mcdonalds.png");
+    expect(file?.metadata?.imageWidth).toBe(2);
+    expect(file?.chunkCount).toBe(3);
+  });
+
+  it("does not relabel unchanged images", async () => {
+    const filePath = path.join(root, "cached.png");
+    await fs.writeFile(
+      filePath,
+      Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1,
+      ]),
+    );
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("generateContent")) {
+        return {
+          ok: true,
+          json: async () => ({ candidates: [{ content: { parts: [{ text: "Cached image label" }] } }] }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ embedding: { values: [0.1, 0.2, 0.3, 0.4] } }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await indexFile(filePath);
+    await indexFile(filePath);
+
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("generateContent"))).toHaveLength(1);
+  });
+
+  it("keeps image indexing partial when label generation fails", async () => {
+    const filePath = path.join(root, "sign.jpeg");
+    await fs.writeFile(filePath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("generateContent")) {
+          return { ok: false, text: async () => "vision unavailable" };
+        }
+        return {
+          ok: true,
+          json: async () => ({ embedding: { values: [0.1, 0.2, 0.3, 0.4] } }),
+        };
+      }),
+    );
+
+    await indexFile(filePath);
+
+    const repo = await getMockedRepository();
+    const file = await repo.findFile(filePath);
+    expect(file?.status).toBe("partial");
+    expect(file?.labelStatus).toBe("failed");
+    expect(file?.chunkCount).toBeGreaterThanOrEqual(2);
   });
 });
 
