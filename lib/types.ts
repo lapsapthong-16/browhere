@@ -1,12 +1,27 @@
 export type IndexState = "notConfigured" | "ready" | "indexing" | "failed";
 export type FileStatus = "indexed" | "failed" | "partial";
-export type RecordKind = "text" | "rawImage" | "imageLabel" | "metadata";
-export type ContextSource = "extractedText" | "rawImageVector" | "imageLabel" | "metadata";
+export type RecordKind = "text" | "rawImage" | "imageLabel" | "imageVisualCaption" | "imageOcrText" | "metadata";
+export type ContextSource =
+  | "extractedText"
+  | "rawImageVector"
+  | "imageLabel"
+  | "imageVisualCaption"
+  | "imageOcrText"
+  | "metadata";
 export type MatchKind = ContextSource | "filenamePath" | "unconfirmedVisual" | "explanation";
+export type EvidenceProvenance =
+  | "human-authored"
+  | "raw-visual"
+  | "ai-visual-caption"
+  | "ocr"
+  | "metadata"
+  | "llm-explanation";
 export type RepairOperation =
   | "rawImageEmbedding"
   | "imageLabel"
+  | "imageOcr"
   | "imageLabelEmbedding"
+  | "imageOcrEmbedding"
   | "metadataEmbedding"
   | "textEmbedding";
 export type RepairTaskStatus = "queued" | "running" | "cooldown";
@@ -48,6 +63,65 @@ export interface IndexedFileRecord {
   metadataContext?: string;
   labelStatus?: "notApplicable" | "generated" | "failed" | "pending" | "retrying";
   labelReason?: string;
+  ocrStatus?: "notApplicable" | "generated" | "empty" | "failed" | "pending" | "retrying";
+  ocrReason?: string;
+}
+
+export interface ChunkLocation {
+  chunkIndex?: number;
+  page?: number;
+  heading?: string;
+  section?: string;
+}
+
+export interface EvidenceMetadata {
+  evidenceId: string;
+  provenance: EvidenceProvenance;
+  location?: ChunkLocation;
+  provider?: string;
+  model?: string;
+}
+
+export interface ScoreComponents {
+  vector?: number;
+  lexical?: number;
+  filenamePath?: number;
+  metadata?: number;
+  sourceConfidence?: number;
+  filter?: number;
+  recency?: number;
+  boost?: number;
+  final?: number;
+}
+
+export interface QueryInterpretation {
+  originalQuery: string;
+  semanticQueries: string[];
+  fileTypes?: string[];
+  folderHints?: string[];
+  quotedTerms?: string[];
+  dateHint?: string;
+  visualIntent?: boolean;
+  ocrIntent?: boolean;
+  answerIntent?: boolean;
+}
+
+export interface RetrievalDiagnostics {
+  retrievalPasses: Array<{ query: string; semanticCandidateCount: number }>;
+  lexicalCandidateCount: number;
+  groupedResultCount: number;
+  omittedCandidateCount?: number;
+  options?: SearchOptions;
+}
+
+export interface SearchOptions {
+  finalLimit?: number;
+  semanticTopK?: number;
+  lexicalTopK?: number;
+  maxRetrievalPasses?: number;
+  answerContextBudget?: number;
+  sourceCaps?: Partial<Record<ContextSource, number>>;
+  answer?: boolean;
 }
 
 export interface ChunkRecord {
@@ -70,6 +144,10 @@ export interface ChunkRecord {
   metadataContext?: string;
   provider?: string;
   model?: string;
+  evidenceId?: string;
+  provenance?: EvidenceProvenance;
+  location?: ChunkLocation;
+  scoreComponents?: ScoreComponents;
 }
 
 export interface IndexFailure {
@@ -147,9 +225,38 @@ export interface SearchResult {
     sources?: ContextSource[];
     confirmed?: boolean;
     unconfirmedReason?: string;
+    evidenceId?: string;
+    provenance?: EvidenceProvenance;
+    location?: ChunkLocation;
   };
+  evidence?: Array<{
+    evidenceId: string;
+    text: string;
+    source: ContextSource;
+    provenance: EvidenceProvenance;
+    location?: ChunkLocation;
+    scoreComponents?: ScoreComponents;
+  }>;
+  scoreComponents?: ScoreComponents;
   metadata?: Pick<FileMetadata, "displayName" | "extension" | "mediaType" | "sizeBytes" | "modifiedDate" | "parentFolders" | "imageWidth" | "imageHeight">;
   readiness: "ready" | "partial";
+}
+
+export interface AnswerCitation {
+  label: string;
+  filePath: string;
+  evidenceId: string;
+  provenance: EvidenceProvenance;
+  location?: ChunkLocation;
+  snippet?: string;
+}
+
+export interface SearchAnswer {
+  status: "answered" | "insufficientEvidence" | "providerUnavailable";
+  text?: string;
+  citations: AnswerCitation[];
+  evidenceIds: string[];
+  message?: string;
 }
 
 export interface SearchResponse {
@@ -160,4 +267,7 @@ export interface SearchResponse {
     message?: string;
   };
   agentic: boolean;
+  queryInterpretation?: QueryInterpretation;
+  diagnostics?: RetrievalDiagnostics;
+  answer?: SearchAnswer;
 }

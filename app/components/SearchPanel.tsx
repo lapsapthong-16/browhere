@@ -4,7 +4,7 @@ import React from "react";
 import { useEffect, useRef, useState } from "react";
 import { hideCurrentDesktopWindow, listenForDesktopSearchFocus } from "@/app/desktop";
 import type { BrowhereController } from "@/app/useBrowhereController";
-import { formatScore, sourceLabel } from "@/app/useBrowhereController";
+import { formatScore, provenanceLabel, sourceLabel } from "@/app/useBrowhereController";
 
 interface SearchPanelProps {
   controller: BrowhereController;
@@ -140,6 +140,21 @@ function SearchResults({ search, busy, desktopReady, compact, onReveal, onOpen, 
 
   return (
     <div className="results spotlightResults" aria-label="Search results">
+      {search?.answer ? (
+        <section className="answerPanel" aria-label="Generated answer">
+          <strong>{search.answer.status === "answered" ? "Answer" : "Answer unavailable"}</strong>
+          <p>{search.answer.text ?? search.answer.message}</p>
+          {search.answer.citations.length ? (
+            <div className="resultMeta">
+              {search.answer.citations.map((citation) => (
+                <span key={`${citation.label}:${citation.evidenceId}`}>
+                  {citation.label} {sourceLabel(citation.provenance)} {citation.filePath}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
       {busy ? (
         Array.from({ length: 3 }, (_, index) => (
           <div className="result resultRow skeletonResult" key={index}>
@@ -166,6 +181,10 @@ function SearchResults({ search, busy, desktopReady, compact, onReveal, onOpen, 
                 <span>#{result.rank}</span>
                 <span>{result.readiness}</span>
                 <span>{sourceLabel(result.matchContext.kind)}</span>
+                {provenanceLabel(result.matchContext.provenance) ? (
+                  <span>{provenanceLabel(result.matchContext.provenance)}</span>
+                ) : null}
+                {result.evidence?.length ? <span>{result.evidence.length} evidence</span> : null}
                 {result.matchContext.confirmed === false ? <span>unconfirmed</span> : null}
               </div>
               <div className="resultActions">

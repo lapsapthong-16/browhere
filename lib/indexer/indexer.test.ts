@@ -104,13 +104,21 @@ describe("indexFile", () => {
 
     const repo = await getMockedRepository();
     const file = await repo.findFile(filePath);
+    const chunks = await repo.getChunksForFile(file!.id);
     expect(file?.labelStatus).toBe("generated");
+    expect(file?.ocrStatus).toBe("generated");
     expect(file?.metadataContext).toContain("mcdonalds.png");
     expect(file?.metadata?.imageWidth).toBe(2);
-    expect(file?.chunkCount).toBe(3);
+    expect(file?.chunkCount).toBe(4);
+    expect(chunks.map((chunk) => chunk.contextSource).sort()).toEqual([
+      "imageOcrText",
+      "imageVisualCaption",
+      "metadata",
+      "rawImageVector",
+    ]);
   });
 
-  it("does not relabel unchanged images", async () => {
+  it("does not regenerate image evidence for unchanged images", async () => {
     const filePath = path.join(root, "cached.png");
     await fs.writeFile(
       filePath,
@@ -135,7 +143,7 @@ describe("indexFile", () => {
     await indexFile(filePath);
     await indexFile(filePath);
 
-    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("generateContent"))).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("generateContent"))).toHaveLength(2);
   });
 
   it("keeps image indexing partial when label generation fails", async () => {
@@ -161,7 +169,9 @@ describe("indexFile", () => {
     expect(file?.status).toBe("partial");
     expect(file?.labelStatus).toBe("pending");
     expect(file?.labelReason).toContain("Retry scheduled");
-    expect(await repo.getRepairTasks()).toHaveLength(1);
+    expect(file?.ocrStatus).toBe("pending");
+    expect(file?.ocrReason).toContain("Retry scheduled");
+    expect(await repo.getRepairTasks()).toHaveLength(2);
     expect(file?.chunkCount).toBeGreaterThanOrEqual(2);
   });
 
@@ -203,7 +213,7 @@ describe("indexFile", () => {
     const file = await repo.findFile(filePath);
     const chunks = await repo.getChunksForFile(file!.id);
     expect(file?.labelStatus).toBe("generated");
-    expect(chunks.filter((chunk) => chunk.contextSource === "imageLabel")).toHaveLength(1);
+    expect(chunks.filter((chunk) => chunk.contextSource === "imageVisualCaption")).toHaveLength(1);
     expect(await repo.getRepairTasks()).toHaveLength(0);
   });
 });

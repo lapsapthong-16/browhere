@@ -378,6 +378,22 @@ h2 {
   -webkit-line-clamp: 2;
 }
 
+.answerPanel {
+  display: grid;
+  gap: 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfaf7;
+  padding: 0.9rem 1rem;
+}
+
+.answerPanel p {
+  margin: 0;
+  color: #303638;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
 .resultMeta {
   display: flex;
   flex-wrap: wrap;

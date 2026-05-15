@@ -134,11 +134,17 @@ export async function indexFile(filePath: string) {
   const imageFile = IMAGE_EXTENSIONS.has(ext);
   const hasCurrentMetadata = Boolean(existing?.metadataContext && existing.metadata);
   const hasHandledImageLabel = !imageFile || existing?.labelStatus === "generated";
-  if (unchanged && hasCurrentMetadata && hasHandledImageLabel) {
+  const hasHandledImageOcr = !imageFile || existing?.ocrStatus === "generated" || existing?.ocrStatus === "empty";
+  if (unchanged && hasCurrentMetadata && hasHandledImageLabel && hasHandledImageOcr) {
     return;
   }
   if (unchanged && hasCurrentMetadata && imageFile && existing) {
-    await queueImageLabelRepair(existing, existing.labelReason || "Image caption pending.");
+    if (!hasHandledImageLabel) {
+      await queueImageLabelRepair(existing, existing.labelReason || "Image caption pending.");
+    }
+    if (!hasHandledImageOcr) {
+      await queueImageOcrRepair(existing, existing.ocrReason || "Image OCR pending.");
+    }
     void runRepairQueue();
     return;
   }
@@ -154,7 +160,10 @@ export async function indexFile(filePath: string) {
   let reason = extracted.reason;
   let labelStatus: IndexedFileRecord["labelStatus"] = imageFile ? "failed" : "notApplicable";
   let labelReason: string | undefined;
+  let ocrStatus: IndexedFileRecord["ocrStatus"] = imageFile ? "pending" : "notApplicable";
+  let ocrReason: string | undefined;
   let labelError: unknown;
+  let ocrError: unknown;
   let rawImageError: unknown;
   let metadataError: unknown;
 
@@ -219,7 +228,9 @@ export async function indexFile(filePath: string) {
     const imageChunk = extracted.chunks.find((chunk) => chunk.kind === "image" && chunk.rawImage && chunk.mimeType);
     if (imageChunk?.rawImage && imageChunk.mimeType) {
       try {
-        const cachedLabelChunk = existingChunks.find((chunk) => chunk.contextSource === "imageLabel");
+        const cachedLabelChunk = existingChunks.find(
+          (chunk) => chunk.contextSource === "imageVisualCaption" || chunk.contextSource === "imageLabel",
+        );
         const cachedLabel = cachedLabelChunk?.text.trim();
         const labelResult = cachedLabel && cachedLabelChunk
           ? {
@@ -239,8 +250,8 @@ export async function indexFile(filePath: string) {
           text: labelResult.text,
           vector,
           kind: "text",
-          recordKind: "imageLabel",
-          contextSource: "imageLabel",
+          recordKind: "imageVisualCaption",
+          contextSource: "imageVisualCaption",
           status,
           reason,
           modifiedMs: stats.mtimeMs,
@@ -257,6 +268,51 @@ export async function indexFile(filePath: string) {
         labelReason = labelReasonFor(error);
         status = chunks.length > 0 ? "partial" : status;
         reason = reason ?? "Image label unavailable; retry scheduled.";
+      }
+
+      try {
+        const cachedOcrChunk = existingChunks.find((chunk) => chunk.contextSource === "imageOcrText");
+        const cachedOcr = cachedOcrChunk?.text.trim();
+        const ocrResult = cachedOcr && cachedOcrChunk
+          ? {
+              text: cachedOcr,
+              provider: "gemini" as const,
+              model: cachedOcrChunk.model ?? process.env.BROWHERE_GEMINI_VISION_MODEL ?? "gemini-2.0-flash",
+            }
+          : await gemini.readImageText(imageChunk.rawImage, imageChunk.mimeType);
+        if (ocrResult?.text) {
+          ocrStatus = "generated";
+          const vector = await gemini.embedText(ocrResult.text);
+          chunks.push({
+            id: `${fileId}:ocr`,
+            fileId,
+            filePath,
+            displayName: path.basename(filePath),
+            fileType: ext,
+            text: ocrResult.text,
+            vector,
+            kind: "text",
+            recordKind: "imageOcrText",
+            contextSource: "imageOcrText",
+            status,
+            reason,
+            modifiedMs: stats.mtimeMs,
+            sizeBytes: stats.size,
+            indexedAt,
+            metadata,
+            metadataContext,
+            provider: ocrResult.provider,
+            model: ocrResult.model,
+          });
+        } else {
+          ocrStatus = "empty";
+        }
+      } catch (error) {
+        ocrError = error;
+        ocrStatus = "pending";
+        ocrReason = ocrReasonFor(error);
+        status = chunks.length > 0 ? "partial" : status;
+        reason = reason ?? "Image OCR unavailable; retry scheduled.";
       }
     }
   }
@@ -305,6 +361,8 @@ export async function indexFile(filePath: string) {
     metadataContext,
     labelStatus,
     labelReason,
+    ocrStatus,
+    ocrReason,
   };
   if (!(await isApprovedFile(filePath))) {
     await repository.deleteByPath(filePath);
@@ -314,6 +372,10 @@ export async function indexFile(filePath: string) {
   await repository.upsertChunks(fileId, chunks);
   if (imageFile && labelError) {
     await queueRepairTask(file, "imageLabel", labelError);
+    void runRepairQueue();
+  }
+  if (imageFile && ocrError) {
+    await queueRepairTask(file, "imageOcr", ocrError);
     void runRepairQueue();
   }
   if (imageFile && rawImageError) {
@@ -356,6 +418,10 @@ async function runRepairTask(task: RepairTask) {
       case "imageLabelEmbedding":
         await repairImageLabel(file);
         break;
+      case "imageOcr":
+      case "imageOcrEmbedding":
+        await repairImageOcr(file);
+        break;
       case "rawImageEmbedding":
         await repairRawImageEmbedding(file);
         break;
@@ -377,6 +443,8 @@ async function runRepairTask(task: RepairTask) {
         reason: file.reason ?? "Repair retry scheduled.",
         labelStatus: task.operation === "imageLabel" ? "pending" : file.labelStatus,
         labelReason: labelReasonFor(error),
+        ocrStatus: task.operation === "imageOcr" ? "pending" : file.ocrStatus,
+        ocrReason: task.operation === "imageOcr" ? ocrReasonFor(error) : file.ocrReason,
       });
     }
   }
@@ -401,8 +469,8 @@ async function repairImageLabel(file: IndexedFileRecord) {
     text: labelResult.text,
     vector,
     kind: "text",
-    recordKind: "imageLabel",
-    contextSource: "imageLabel",
+    recordKind: "imageVisualCaption",
+    contextSource: "imageVisualCaption",
     status: "indexed",
     modifiedMs: file.modifiedMs,
     sizeBytes: file.sizeBytes,
@@ -423,6 +491,52 @@ async function repairImageLabel(file: IndexedFileRecord) {
     metadataContext,
     labelStatus: "generated",
     labelReason: undefined,
+  });
+}
+
+async function repairImageOcr(file: IndexedFileRecord) {
+  const ext = extensionFor(file.path);
+  if (!IMAGE_EXTENSIONS.has(ext)) return;
+  const rawImage = await fs.readFile(file.path);
+  const mimeType = ext === "png" ? "image/png" : "image/jpeg";
+  const ocrResult = await gemini.readImageText(rawImage, mimeType);
+  const indexedAt = Date.now();
+  const metadata = file.metadata ?? (await buildFileMetadata(file.path, await fs.stat(file.path), indexedAt));
+  const metadataContext = file.metadataContext ?? buildMetadataContext(metadata);
+  if (ocrResult?.text) {
+    const vector = await gemini.embedText(ocrResult.text);
+    await repository.upsertChunk({
+      id: `${file.id}:ocr`,
+      fileId: file.id,
+      filePath: file.path,
+      displayName: file.displayName,
+      fileType: file.fileType,
+      text: ocrResult.text,
+      vector,
+      kind: "text",
+      recordKind: "imageOcrText",
+      contextSource: "imageOcrText",
+      status: "indexed",
+      modifiedMs: file.modifiedMs,
+      sizeBytes: file.sizeBytes,
+      indexedAt,
+      metadata,
+      metadataContext,
+      provider: ocrResult.provider,
+      model: ocrResult.model,
+    });
+  }
+  const chunkCount = (await repository.getChunksForFile(file.id)).length;
+  await repository.updateFile({
+    ...file,
+    status: file.reason === "Image OCR unavailable; retry scheduled." ? "indexed" : file.status,
+    reason: file.reason === "Image OCR unavailable; retry scheduled." ? undefined : file.reason,
+    indexedAt,
+    chunkCount,
+    metadata,
+    metadataContext,
+    ocrStatus: ocrResult?.text ? "generated" : "empty",
+    ocrReason: undefined,
   });
 }
 
@@ -505,6 +619,17 @@ async function queueImageLabelRepair(file: IndexedFileRecord, reason: string) {
   await queueRepairTask(file, "imageLabel", new Error(reason));
 }
 
+async function queueImageOcrRepair(file: IndexedFileRecord, reason: string) {
+  await repository.updateFile({
+    ...file,
+    status: file.status === "indexed" ? "partial" : file.status,
+    reason: file.reason ?? "Image OCR unavailable; retry scheduled.",
+    ocrStatus: "pending",
+    ocrReason: reason,
+  });
+  await queueRepairTask(file, "imageOcr", new Error(reason));
+}
+
 async function queueRepairTask(file: IndexedFileRecord, operation: RepairOperation, error: unknown) {
   const task = nextRepairTask(
     {
@@ -562,6 +687,13 @@ function labelReasonFor(error: unknown): string {
   if (kind === "quota") return "Caption delayed by Gemini quota. Retry scheduled.";
   if (kind === "providerUnavailable") return "Caption pending until Gemini API key is available.";
   return "Caption failed. Retry scheduled.";
+}
+
+function ocrReasonFor(error: unknown): string {
+  const kind = repairErrorKind(error);
+  if (kind === "quota") return "OCR delayed by Gemini quota. Retry scheduled.";
+  if (kind === "providerUnavailable") return "OCR pending until Gemini API key is available.";
+  return "OCR failed. Retry scheduled.";
 }
 
 async function buildFileMetadata(filePath: string, stats: Stats, indexedAt: number): Promise<FileMetadata> {

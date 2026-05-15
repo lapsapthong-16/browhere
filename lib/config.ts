@@ -16,6 +16,10 @@ export const DOCUMENT_EXTENSIONS = new Set(["pdf", "docx"]);
 
 export const DEFAULT_VECTOR_DIMENSIONS = 3072;
 export const DEFAULT_MAX_RETRIEVAL_PASSES = 2;
+export const DEFAULT_FINAL_RESULT_LIMIT = 20;
+export const DEFAULT_SEMANTIC_TOP_K = 80;
+export const DEFAULT_LEXICAL_TOP_K = 80;
+export const DEFAULT_ANSWER_CONTEXT_BUDGET = 6_000;
 
 export function getIndexDir(): string {
   const configured = process.env.BROWHERE_INDEX_DIR;
@@ -74,4 +78,23 @@ export function getGroqConfig() {
         DEFAULT_MAX_RETRIEVAL_PASSES,
     ),
   };
+}
+
+export function getRetrievalConfig() {
+  return {
+    finalLimit: numberFromEnv("BROWHERE_FINAL_RESULT_LIMIT", DEFAULT_FINAL_RESULT_LIMIT),
+    maxFinalLimit: numberFromEnv("BROWHERE_MAX_FINAL_RESULT_LIMIT", 50),
+    semanticTopK: numberFromEnv("BROWHERE_SEMANTIC_TOP_K", DEFAULT_SEMANTIC_TOP_K),
+    maxSemanticTopK: numberFromEnv("BROWHERE_MAX_SEMANTIC_TOP_K", 200),
+    lexicalTopK: numberFromEnv("BROWHERE_LEXICAL_TOP_K", DEFAULT_LEXICAL_TOP_K),
+    maxLexicalTopK: numberFromEnv("BROWHERE_MAX_LEXICAL_TOP_K", 200),
+    maxRetrievalPasses: numberFromEnv("BROWHERE_MAX_RETRIEVAL_PASSES", DEFAULT_MAX_RETRIEVAL_PASSES),
+    answerContextBudget: numberFromEnv("BROWHERE_ANSWER_CONTEXT_BUDGET", DEFAULT_ANSWER_CONTEXT_BUDGET),
+    maxAnswerContextBudget: numberFromEnv("BROWHERE_MAX_ANSWER_CONTEXT_BUDGET", 20_000),
+  };
+}
+
+function numberFromEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }

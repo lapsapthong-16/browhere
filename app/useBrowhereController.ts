@@ -188,8 +188,19 @@ export function sourceLabel(kind: string) {
   if (kind === "filenamePath") return "filename/path";
   if (kind === "unconfirmedVisual") return "unconfirmed visual";
   if (kind === "rawImageVector") return "raw visual";
-  if (kind === "imageLabel") return "image label";
+  if (kind === "imageLabel" || kind === "imageVisualCaption") return "visual caption";
+  if (kind === "imageOcrText") return "OCR text";
   if (kind === "extractedText") return "text";
   return kind;
 }
 
+export function provenanceLabel(kind: string | undefined) {
+  if (!kind) return undefined;
+  if (kind === "human-authored") return "human-authored";
+  if (kind === "raw-visual") return "raw visual";
+  if (kind === "ai-visual-caption") return "AI visual caption";
+  if (kind === "ocr") return "OCR-derived";
+  if (kind === "metadata") return "metadata";
+  if (kind === "llm-explanation") return "LLM explanation";
+  return kind;
+}

@@ -5,6 +5,7 @@ import { getIndexDir } from "@/lib/config";
 import type {
   ChunkRecord,
   ContextSource,
+  EvidenceProvenance,
   FileMetadata,
   IndexedFileRecord,
   IndexedFolder,
@@ -17,8 +18,19 @@ import type {
 const FILES_TABLE = "files";
 const CHUNKS_TABLE = "chunks";
 const META_FILE = "metadata.json";
-const FILE_STRING_COLUMNS = ["metadata", "metadataContext", "labelStatus", "labelReason"] as const;
-const CHUNK_STRING_COLUMNS = ["recordKind", "contextSource", "metadata", "metadataContext", "provider", "model"] as const;
+const FILE_STRING_COLUMNS = ["metadata", "metadataContext", "labelStatus", "labelReason", "ocrStatus", "ocrReason"] as const;
+const CHUNK_STRING_COLUMNS = [
+  "recordKind",
+  "contextSource",
+  "metadata",
+  "metadataContext",
+  "provider",
+  "model",
+  "evidenceId",
+  "provenance",
+  "location",
+  "scoreComponents",
+] as const;
 
 interface Metadata {
   schemaVersion: number;
@@ -511,7 +523,11 @@ function normalizeRow<T>(row: T): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(row as Record<string, unknown>).map(([key, value]) => [
       key,
-      value === undefined ? "" : key === "metadata" && value ? JSON.stringify(value) : value,
+      value === undefined
+        ? ""
+        : (key === "metadata" || key === "location" || key === "scoreComponents") && value
+          ? JSON.stringify(value)
+          : value,
     ]),
   );
 }
@@ -523,19 +539,26 @@ function normalizeFileRow(file: IndexedFileRecord): Record<string, unknown> {
     metadataContext: file.metadataContext ?? "",
     labelStatus: file.labelStatus ?? "",
     labelReason: file.labelReason ?? "",
+    ocrStatus: file.ocrStatus ?? "",
+    ocrReason: file.ocrReason ?? "",
   });
 }
 
 function normalizeChunkRow(chunk: ChunkRecord): Record<string, unknown> {
   const recordKind = normalizeRecordKind(chunk.recordKind, chunk.kind);
+  const contextSource = normalizeContextSource(chunk.contextSource, recordKind);
   return normalizeRow({
     ...chunk,
     recordKind,
-    contextSource: normalizeContextSource(chunk.contextSource, recordKind),
+    contextSource,
     metadata: chunk.metadata ?? "",
     metadataContext: chunk.metadataContext ?? "",
     provider: chunk.provider ?? "",
     model: chunk.model ?? "",
+    evidenceId: chunk.evidenceId || chunk.id,
+    provenance: normalizeProvenance(chunk.provenance, contextSource),
+    location: chunk.location ?? defaultLocation(chunk.id),
+    scoreComponents: chunk.scoreComponents ?? "",
   });
 }
 
@@ -553,17 +576,34 @@ function normalizeFileRecord(row: IndexedFileRecord): IndexedFileRecord {
         ? row.labelStatus
         : undefined,
     labelReason: row.labelReason || undefined,
+    ocrStatus:
+      row.ocrStatus === "notApplicable" ||
+      row.ocrStatus === "generated" ||
+      row.ocrStatus === "empty" ||
+      row.ocrStatus === "failed" ||
+      row.ocrStatus === "pending" ||
+      row.ocrStatus === "retrying"
+        ? row.ocrStatus
+        : undefined,
+    ocrReason: row.ocrReason || undefined,
   };
 }
 
 function normalizeChunkRecord(row: ChunkRecord): ChunkRecord {
   const recordKind = normalizeRecordKind(row.recordKind, row.kind);
+  const contextSource = normalizeContextSource(row.contextSource, recordKind);
   return {
     ...row,
     recordKind,
-    contextSource: normalizeContextSource(row.contextSource, recordKind),
+    contextSource,
     metadata: parseMetadata(row.metadata),
     metadataContext: row.metadataContext ?? "",
+    provider: row.provider || undefined,
+    model: row.model || undefined,
+    evidenceId: row.evidenceId || row.id,
+    provenance: normalizeProvenance(row.provenance, contextSource),
+    location: parseJsonObject(row.location) ?? defaultLocation(row.id),
+    scoreComponents: parseJsonObject(row.scoreComponents),
   };
 }
 
@@ -580,20 +620,71 @@ function parseMetadata(value: unknown): FileMetadata | undefined {
 }
 
 function normalizeRecordKind(value: unknown, legacyKind: ChunkRecord["kind"]): RecordKind {
-  if (value === "text" || value === "rawImage" || value === "imageLabel" || value === "metadata") {
+  if (
+    value === "text" ||
+    value === "rawImage" ||
+    value === "imageLabel" ||
+    value === "imageVisualCaption" ||
+    value === "imageOcrText" ||
+    value === "metadata"
+  ) {
     return value;
   }
   return legacyKind === "image" ? "rawImage" : "text";
 }
 
 function normalizeContextSource(value: unknown, recordKind: RecordKind): ContextSource {
-  if (value === "extractedText" || value === "rawImageVector" || value === "imageLabel" || value === "metadata") {
+  if (
+    value === "extractedText" ||
+    value === "rawImageVector" ||
+    value === "imageLabel" ||
+    value === "imageVisualCaption" ||
+    value === "imageOcrText" ||
+    value === "metadata"
+  ) {
     return value;
   }
   if (recordKind === "rawImage") return "rawImageVector";
-  if (recordKind === "imageLabel") return "imageLabel";
+  if (recordKind === "imageLabel" || recordKind === "imageVisualCaption") return "imageVisualCaption";
+  if (recordKind === "imageOcrText") return "imageOcrText";
   if (recordKind === "metadata") return "metadata";
   return "extractedText";
+}
+
+function normalizeProvenance(value: unknown, contextSource: ContextSource): EvidenceProvenance {
+  if (
+    value === "human-authored" ||
+    value === "raw-visual" ||
+    value === "ai-visual-caption" ||
+    value === "ocr" ||
+    value === "metadata" ||
+    value === "llm-explanation"
+  ) {
+    return value;
+  }
+  if (contextSource === "rawImageVector") return "raw-visual";
+  if (contextSource === "imageLabel" || contextSource === "imageVisualCaption") return "ai-visual-caption";
+  if (contextSource === "imageOcrText") return "ocr";
+  if (contextSource === "metadata") return "metadata";
+  return "human-authored";
+}
+
+function defaultLocation(id: string) {
+  const chunkIndexText = id.split(":").at(-1);
+  const chunkIndex = chunkIndexText && /^\d+$/.test(chunkIndexText) ? Number(chunkIndexText) : undefined;
+  return chunkIndex === undefined ? undefined : { chunkIndex };
+}
+
+function parseJsonObject<T extends object>(value: unknown): T | undefined {
+  if (!value) return undefined;
+  if (typeof value === "object") return value as T;
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed = JSON.parse(value) as T;
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function documentLogFor(file: IndexedFileRecord, folders: IndexedFolder[]): IndexedDocumentLog {

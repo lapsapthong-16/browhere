@@ -9,6 +9,44 @@ describe("GroqClient", () => {
     vi.unstubAllEnvs();
   });
 
+  it("returns structured retrieval intent from planning", async () => {
+    vi.stubEnv("GROQ_API_KEY", "key");
+    vi.stubEnv("BROWHERE_MAX_RETRIEVAL_PASSES", "2");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  queries: ["receipt screenshot total"],
+                  intent: {
+                    fileTypes: ["png"],
+                    folderHints: ["Receipts"],
+                    visualIntent: true,
+                    ocrIntent: true,
+                    answerIntent: true,
+                  },
+                }),
+              },
+            },
+          ],
+        }),
+      })),
+    );
+
+    const plan = await new GroqClient().plan("what total is visible in receipt screenshot png");
+
+    expect(plan.queries).toEqual(["what total is visible in receipt screenshot png", "receipt screenshot total"]);
+    expect(plan.intent?.fileTypes).toEqual(["png"]);
+    expect(plan.intent?.folderHints).toEqual(["Receipts"]);
+    expect(plan.intent?.ocrIntent).toBe(true);
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
   it("reranks only known candidate identities", async () => {
     vi.stubEnv("GROQ_API_KEY", "key");
     vi.stubGlobal(
@@ -40,6 +78,38 @@ describe("GroqClient", () => {
 
     expect(reranked.map((item) => item.id)).toEqual(["b", "a"]);
     expect(reranked[0].matchContext.text).toBe("Better match");
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("generates grounded answers with citation labels", async () => {
+    vi.stubEnv("GROQ_API_KEY", "key");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  status: "answered",
+                  answer: "Lizards prefer warmth [E1].",
+                  citations: ["E1"],
+                }),
+              },
+            },
+          ],
+        }),
+      })),
+    );
+
+    const answer = await new GroqClient().answer("what habitat?", [
+      { label: "E1", text: "Lizards live in warm habitats.", filePath: "/tmp/lizards.md", provenance: "human-authored" },
+    ]);
+
+    expect(answer.status).toBe("answered");
+    expect(answer.citationLabels).toEqual(["E1"]);
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
