@@ -40,13 +40,16 @@
 
 - [ ] 6.1 Add answer-generation request/response types and API behavior gated by answer intent or explicit answer option.
 - [ ] 6.2 Build a bounded answer context pack from top-ranked diverse evidence records.
-- [ ] 6.3 Implement grounded answer generation with citations to file path, evidence id, and page/section/chunk metadata when available.
-- [ ] 6.4 Return insufficient-evidence responses when retrieved context does not support an answer.
-- [ ] 6.5 Add tests for cited answers, insufficient evidence, provider-unavailable fallback, and answer context budgeting.
+- [ ] 6.3 Add citation mapping from provider citation labels to local file path, evidence id, provenance, and location metadata.
+- [ ] 6.4 Implement grounded answer generation with citations to file path, evidence id, and page/section/chunk metadata when available.
+- [ ] 6.5 Return insufficient-evidence responses when retrieved context does not support an answer.
+- [ ] 6.6 Update the search UI to display answer output, citations, and supporting evidence when answer mode is enabled.
+- [ ] 6.7 Add tests for cited answers, invalid/missing citation handling, insufficient evidence, provider-unavailable fallback, and answer context budgeting.
 
 ## 7. Verification
 
-- [ ] 7.1 Run unit tests for search, repository normalization, indexing, Groq planning/reranking, and answer generation.
-- [ ] 7.2 Run typecheck and fix any API/UI type regressions.
-- [ ] 7.3 Run targeted UI/e2e coverage for normal search results and answer-enabled search.
-- [ ] 7.4 Validate OpenSpec status for the change before implementation is marked complete.
+- [ ] 7.1 Add fixture-based retrieval evaluation cases covering expected top result, expected evidence source, citation correctness, and insufficient-evidence behavior.
+- [ ] 7.2 Run unit tests for search, repository normalization, indexing, Groq planning/reranking, and answer generation.
+- [ ] 7.3 Run typecheck and fix any API/UI type regressions.
+- [ ] 7.4 Run targeted UI/e2e coverage for normal search results and answer-enabled search.
+- [ ] 7.5 Validate OpenSpec status for the change before implementation is marked complete.
