@@ -7,12 +7,17 @@
     "dev": "RUST_LOG=lance::dataset::scanner=error next dev",
     "build": "next build",
     "start": "next start",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build && node scripts/package-next-runtime.mjs",
+    "tauri:install-app": "ditto src-tauri/target/release/bundle/macos/Browhere.app /Applications/Browhere.app",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.20.0",
+    "@tauri-apps/api": "^2.8.0",
     "chokidar": "^4.0.3",
     "mammoth": "^1.9.1",
     "next": "^15.3.0",
@@ -23,6 +28,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
+    "@tauri-apps/cli": "^2.8.4",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@types/node": "^22.10.7",

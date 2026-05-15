@@ -22,6 +22,10 @@ export function getIndexDir(): string {
   if (configured && configured.trim().length > 0) {
     return path.resolve(configured);
   }
+  const desktopDataDir = process.env.BROWHERE_APP_DATA_DIR;
+  if (desktopDataDir && desktopDataDir.trim().length > 0) {
+    return path.join(desktopDataDir, "index");
+  }
   return path.join(process.cwd(), ".browhere", "index");
 }
 

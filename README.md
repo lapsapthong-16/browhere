@@ -133,7 +133,7 @@ BROWHERE_GROQ_MODEL=llama-3.3-70b-versatile
 BROWHERE_MAX_RETRIEVAL_PASSES=2
 ```
 
-Run the app:
+Run the web app in development:
 
 ```bash
 npm run dev
@@ -141,13 +141,60 @@ npm run dev
 
 Open `http://localhost:3000`.
 
+Run the desktop app in development:
+
+```bash
+npm run tauri:dev
+```
+
+This starts Tauri against the Next.js dev server. It is useful while coding, but it is not the same app bundle you click in `/Applications`.
+
+## Desktop App Build and Install
+
+The clickable macOS app lives at:
+
+```text
+/Applications/Browhere.app
+```
+
+After code changes, rebuilding does not automatically replace that installed app. Use both commands:
+
+```bash
+npm run tauri:build
+npm run tauri:install-app
+```
+
+`npm run tauri:build` creates the release bundle at:
+
+```text
+src-tauri/target/release/bundle/macos/Browhere.app
+```
+
+`npm run tauri:install-app` copies that rebuilt bundle over:
+
+```text
+/Applications/Browhere.app
+```
+
+Start the installed app:
+
+```bash
+open /Applications/Browhere.app
+```
+
+You can also start it by double-clicking `/Applications/Browhere.app` in Finder.
+
+If the global shortcut does not open the search window, close any running `npm run tauri:dev` or `npm run tauri` instance first. Only one app can own `Command+Shift+Space` at a time.
+
 ## Usage
 
-1. Enter an absolute local folder path in the approved folders form.
-2. Wait for the index status to show files and chunks.
-3. Search with natural language, for example `image of a restaurant sign`, `budget PDF`, or `notes about launch risks`.
-4. Review ranked results, match context, readiness state, and source type.
-5. Remove a folder when you no longer want that folder included in search.
+1. Start `/Applications/Browhere.app`.
+2. Open the main window from the app icon, or press `Command+Shift+Space` to open the search window.
+3. Enter an absolute local folder path in the approved folders form, or use the folder picker in the desktop app.
+4. Wait for the index status to show files and chunks.
+5. Search with natural language, for example `image of a restaurant sign`, `budget PDF`, or `notes about launch risks`.
+6. Review ranked results, match context, readiness state, and source type.
+7. Remove a folder when you no longer want that folder included in search.
 
 The default local index path is `.browhere/index`. Override it with `BROWHERE_INDEX_DIR`.
 
@@ -157,6 +204,9 @@ The default local index path is `.browhere/index`. Override it with `BROWHERE_IN
 npm run dev        # Start the Next.js development server
 npm run build      # Build for production
 npm run start      # Start the production server
+npm run tauri:dev  # Start the desktop app in development
+npm run tauri:build # Build the macOS desktop release bundle
+npm run tauri:install-app # Copy the release bundle to /Applications/Browhere.app
 npm run test       # Run Vitest tests
 npm run test:e2e   # Run Playwright tests
 npm run typecheck  # Run TypeScript checks
