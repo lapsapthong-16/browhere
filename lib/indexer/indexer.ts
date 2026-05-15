@@ -221,17 +221,24 @@ export async function indexFile(filePath: string) {
     const imageChunk = extracted.chunks.find((chunk) => chunk.kind === "image" && chunk.rawImage && chunk.mimeType);
     if (imageChunk?.rawImage && imageChunk.mimeType) {
       try {
-        const cachedLabel = existingChunks.find((chunk) => chunk.contextSource === "imageLabel")?.text.trim();
-        const label = cachedLabel || (await gemini.labelImage(imageChunk.rawImage, imageChunk.mimeType));
+        const cachedLabelChunk = existingChunks.find((chunk) => chunk.contextSource === "imageLabel");
+        const cachedLabel = cachedLabelChunk?.text.trim();
+        const labelResult = cachedLabel && cachedLabelChunk
+          ? {
+              text: cachedLabel,
+              provider: cachedLabelChunk.provider === "huggingface" ? "huggingface" as const : "gemini" as const,
+              model: cachedLabelChunk.model ?? process.env.BROWHERE_GEMINI_VISION_MODEL ?? "gemini-2.0-flash",
+            }
+          : await gemini.labelImage(imageChunk.rawImage, imageChunk.mimeType);
         labelStatus = "generated";
-        const vector = await gemini.embedText(label);
+        const vector = await gemini.embedText(labelResult.text);
         chunks.push({
           id: `${fileId}:label`,
           fileId,
           filePath,
           displayName: path.basename(filePath),
           fileType: ext,
-          text: label,
+          text: labelResult.text,
           vector,
           kind: "text",
           recordKind: "imageLabel",
@@ -243,8 +250,8 @@ export async function indexFile(filePath: string) {
           indexedAt,
           metadata,
           metadataContext,
-          provider: "gemini",
-          model: process.env.BROWHERE_GEMINI_VISION_MODEL ?? "gemini-2.0-flash",
+          provider: labelResult.provider,
+          model: labelResult.model,
         });
       } catch (error) {
         labelError = error;
@@ -382,8 +389,8 @@ async function repairImageLabel(file: IndexedFileRecord) {
   if (!IMAGE_EXTENSIONS.has(ext)) return;
   const rawImage = await fs.readFile(file.path);
   const mimeType = ext === "png" ? "image/png" : "image/jpeg";
-  const label = await gemini.labelImage(rawImage, mimeType);
-  const vector = await gemini.embedText(label);
+  const labelResult = await gemini.labelImage(rawImage, mimeType);
+  const vector = await gemini.embedText(labelResult.text);
   const indexedAt = Date.now();
   const metadata = file.metadata ?? (await buildFileMetadata(file.path, await fs.stat(file.path), indexedAt));
   const metadataContext = file.metadataContext ?? buildMetadataContext(metadata);
@@ -393,7 +400,7 @@ async function repairImageLabel(file: IndexedFileRecord) {
     filePath: file.path,
     displayName: file.displayName,
     fileType: file.fileType,
-    text: label,
+    text: labelResult.text,
     vector,
     kind: "text",
     recordKind: "imageLabel",
@@ -404,8 +411,8 @@ async function repairImageLabel(file: IndexedFileRecord) {
     indexedAt,
     metadata,
     metadataContext,
-    provider: "gemini",
-    model: process.env.BROWHERE_GEMINI_VISION_MODEL ?? "gemini-2.0-flash",
+    provider: labelResult.provider,
+    model: labelResult.model,
   });
   const chunkCount = (await repository.getChunksForFile(file.id)).length;
   await repository.updateFile({

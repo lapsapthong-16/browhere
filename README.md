@@ -116,6 +116,7 @@ Create `.env.local`:
 ```bash
 GEMINI_API_KEY=your_gemini_key
 GROQ_API_KEY=your_groq_key
+HUGGINGFACE_API_KEY=your_huggingface_key
 ```
 
 Groq is optional. Gemini is required for embeddings.
@@ -128,6 +129,8 @@ BROWHERE_GEMINI_ENDPOINT=https://generativelanguage.googleapis.com/v1beta
 BROWHERE_GEMINI_EMBEDDING_MODEL=gemini-embedding-2
 BROWHERE_GEMINI_VISION_MODEL=gemini-2.0-flash
 BROWHERE_GEMINI_EMBEDDING_DIMENSIONS=3072
+BROWHERE_IMAGE_LABEL_PROVIDER=gemini
+BROWHERE_HUGGINGFACE_IMAGE_CAPTION_MODEL=google/gemma-3n-E4B-it:together
 BROWHERE_GROQ_ENDPOINT=https://api.groq.com/openai/v1/chat/completions
 BROWHERE_GROQ_MODEL=llama-3.3-70b-versatile
 BROWHERE_MAX_RETRIEVAL_PASSES=2
