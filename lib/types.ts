@@ -97,9 +97,12 @@ export interface IndexedDocumentLog {
   displayName: string;
   filePath: string;
   folderPath: string;
+  fileType: string;
   indexedAt: number;
   chunkCount: number;
   status: FileStatus;
+  labelStatus?: IndexedFileRecord["labelStatus"];
+  labelEmbedded?: boolean;
 }
 
 export interface IndexStatus {

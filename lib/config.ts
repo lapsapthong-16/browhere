@@ -22,6 +22,10 @@ export function getIndexDir(): string {
   if (configured && configured.trim().length > 0) {
     return path.resolve(configured);
   }
+  const desktopDataDir = process.env.BROWHERE_APP_DATA_DIR;
+  if (desktopDataDir && desktopDataDir.trim().length > 0) {
+    return path.join(desktopDataDir, "index");
+  }
   return path.join(process.cwd(), ".browhere", "index");
 }
 
@@ -39,6 +43,23 @@ export function getGeminiConfig() {
         DEFAULT_VECTOR_DIMENSIONS,
     ),
   };
+}
+
+export function getHuggingFaceConfig() {
+  return {
+    apiKey: process.env.HUGGINGFACE_API_KEY ?? process.env.HF_TOKEN ?? "",
+    endpoint:
+      process.env.BROWHERE_HUGGINGFACE_ENDPOINT ??
+      "https://router.huggingface.co/v1/chat/completions",
+    imageCaptionModel:
+      process.env.BROWHERE_HUGGINGFACE_IMAGE_CAPTION_MODEL ??
+      "google/gemma-3n-E4B-it:together",
+  };
+}
+
+export function getImageLabelProvider() {
+  const provider = process.env.BROWHERE_IMAGE_LABEL_PROVIDER?.toLowerCase().trim();
+  return provider === "huggingface" ? "huggingface" : "gemini";
 }
 
 export function getGroqConfig() {

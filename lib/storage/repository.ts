@@ -293,9 +293,12 @@ export class IndexRepository {
       displayName: file.displayName,
       filePath: file.path,
       folderPath,
+      fileType: file.fileType,
       indexedAt: file.indexedAt ?? Date.now(),
       chunkCount: file.chunkCount,
       status: file.status,
+      labelStatus: file.labelStatus,
+      labelEmbedded: file.labelStatus === "generated",
     };
     metadata.documents = [
       document,
@@ -338,27 +341,39 @@ export class IndexRepository {
 
   private async getApprovedDocumentLogs(metadata: Metadata): Promise<IndexedDocumentLog[]> {
     if (metadata.documentLogInitialized) {
-      return this.pruneDocumentLogs(metadata);
+      return this.enrichDocumentLogs(metadata);
     }
 
     const files = await this.getFiles();
     metadata.documents = files
       .filter((file) => file.status === "indexed" || file.status === "partial" || file.status === "failed")
-      .map((file) => ({
-        id: file.id,
-        displayName: file.displayName,
-        filePath: file.path,
-        folderPath:
-          file.metadata?.approvedFolderRoot ??
-          metadata.folders.find((folder) => isWithinFolder(file.path, folder.path))?.path ??
-          path.dirname(file.path),
-        indexedAt: file.indexedAt ?? file.metadata?.indexedAt ?? Date.now(),
-        chunkCount: file.chunkCount,
-        status: file.status,
-      }))
+      .map((file) => documentLogFor(file, metadata.folders))
       .sort((left, right) => right.indexedAt - left.indexedAt);
     metadata.documentLogInitialized = true;
     await this.writeMetadata(metadata);
+    return this.pruneDocumentLogs(metadata);
+  }
+
+  private async enrichDocumentLogs(metadata: Metadata): Promise<IndexedDocumentLog[]> {
+    let changed = false;
+    const byId = new Map((await this.getFiles()).map((file) => [file.id, file]));
+    metadata.documents = metadata.documents.map((document) => {
+      const file = byId.get(document.id);
+      if (!file) return document;
+      const next = documentLogFor(file, metadata.folders);
+      next.chunkCount = document.chunkCount;
+      const needsUpdate =
+        document.fileType !== next.fileType ||
+        document.labelStatus !== next.labelStatus ||
+        document.labelEmbedded !== next.labelEmbedded ||
+        document.chunkCount !== next.chunkCount ||
+        document.status !== next.status;
+      if (needsUpdate) changed = true;
+      return needsUpdate ? next : document;
+    });
+    if (changed) {
+      await this.writeMetadata(metadata);
+    }
     return this.pruneDocumentLogs(metadata);
   }
 
@@ -579,6 +594,24 @@ function normalizeContextSource(value: unknown, recordKind: RecordKind): Context
   if (recordKind === "imageLabel") return "imageLabel";
   if (recordKind === "metadata") return "metadata";
   return "extractedText";
+}
+
+function documentLogFor(file: IndexedFileRecord, folders: IndexedFolder[]): IndexedDocumentLog {
+  return {
+    id: file.id,
+    displayName: file.displayName,
+    filePath: file.path,
+    folderPath:
+      file.metadata?.approvedFolderRoot ??
+      folders.find((folder) => isWithinFolder(file.path, folder.path))?.path ??
+      path.dirname(file.path),
+    fileType: file.fileType,
+    indexedAt: file.indexedAt ?? file.metadata?.indexedAt ?? Date.now(),
+    chunkCount: file.chunkCount,
+    status: file.status,
+    labelStatus: file.labelStatus,
+    labelEmbedded: file.labelStatus === "generated",
+  };
 }
 
 function normalizeRepairTasks(value: unknown): RepairTask[] {

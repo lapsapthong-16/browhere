@@ -49,12 +49,17 @@ The system SHALL send only the user query, candidate snippets, and file metadata
 - **AND** it MUST include only data from approved indexed folders.
 
 ### Requirement: Browser UI Displays Search Results
-The system SHALL display ranked file results in the Next.js React UI without native open/reveal actions.
+The system SHALL display ranked file results in the Next.js React UI and SHALL support optional desktop-native result actions when the UI is running inside the Tauri desktop app.
 
-#### Scenario: Results are available
-- **WHEN** search completes successfully
+#### Scenario: Results are available in browser
+- **WHEN** search completes successfully in the browser web app
 - **THEN** the UI MUST show ranked results with display name, file path, file type, match context, and readiness status
-- **AND** it MUST NOT require desktop-native file actions in V1.
+- **AND** it MUST NOT require desktop-native file actions in the browser workflow.
+
+#### Scenario: Results are available in desktop app
+- **WHEN** search completes successfully inside the Tauri desktop app
+- **THEN** the UI MUST show ranked results with display name, file path, file type, match context, and readiness status
+- **AND** it MUST expose desktop-native result actions when those actions are available.
 
 ### Requirement: Search With Caption And Metadata Context
 The system SHALL use extracted text, generated image labels, and selected file metadata as retrieval context.
@@ -87,4 +92,3 @@ The system SHALL send only bounded, safe metadata for candidate results to Groq.
 - **WHEN** candidate results are sent to Groq for reranking or explanation
 - **THEN** the payload MUST include only selected metadata needed for retrieval context
 - **AND** exclude full file contents, non-candidate chunks, and paths outside approved folders.
-
