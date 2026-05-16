@@ -242,6 +242,28 @@ architecture-flow.html
 
 ## Testing
 
+The test suite is built around the risks in a local Agentic RAG system: indexing the right evidence, retrieving the right chunks, keeping provider failures bounded, generating cited answers only from retrieved context, and keeping the UI usable.
+
+| Test area | Files | What it assures |
+| --- | --- | --- |
+| File discovery and exclusions | `lib/files/discovery.test.ts`, `lib/files/exclusions.test.ts` | Supported files are discovered recursively while sensitive/noisy paths such as `.env`, `.git`, `node_modules`, keys, caches, and build outputs are skipped. |
+| Text and document extraction | `lib/files/extraction.test.ts` | Plain text, Markdown, PDF, and DOCX extraction produce searchable chunks or partial-status fallbacks when extraction is incomplete. |
+| Index persistence and migration safety | `lib/storage/repository.test.ts` | Folders, files, chunks, metadata, evidence provenance, and vectors are persisted in LanceDB and normalized safely for older records. |
+| Image evidence indexing | `lib/indexer/indexer.test.ts` | Raw image vectors, visual captions, OCR text, metadata records, provider failures, and repair tasks can coexist without failing the whole index. |
+| Provider clients | `lib/ai/gemini.test.ts`, `lib/ai/groq.test.ts` | Gemini embedding/vision behavior and Groq planning, reranking, and answer generation handle success and missing-provider cases. |
+| Retrieval quality fixtures | `lib/search/retrieval-eval.test.ts` | Representative queries return the expected top file, expected evidence source, citation behavior, and insufficient-evidence behavior. |
+| Search ranking and answer behavior | `lib/search/search.test.ts` | Hybrid scoring, top-k clamping, source caps, query interpretation, OCR/metadata boosts, Groq fallback, answer citations, and context budgeting work as expected. |
+| UI behavior | `app/page.test.tsx`, `tests/rag-search.spec.ts` | Search controls, folder controls, result provenance, answer display, and browser rendering remain visible and usable. |
+
+Key test cases include:
+
+- `document about reptiles in warm habitats` should retrieve the lizard document from extracted text.
+- `finance pdf from Reports folder` should retrieve a PDF using metadata and folder hints.
+- `what words are visible on the menu screenshot` should prioritize OCR-text evidence over a generic visual caption.
+- Answer mode should return citations that map to local file paths and evidence ids.
+- If retrieved evidence is insufficient or citations are invalid, answer mode should return an insufficient-evidence response instead of inventing facts.
+- If Groq is unavailable, search should still return ranked retrieval results and mark answer generation unavailable.
+
 Run local checks:
 
 ```bash
