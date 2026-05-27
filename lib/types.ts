@@ -203,6 +203,7 @@ export interface IndexStatus {
     cooldownCount: number;
     runningCount: number;
     nextRetryAt?: number;
+    lastError?: string;
   };
   message: string;
   providers: {

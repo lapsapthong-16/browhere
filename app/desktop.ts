@@ -5,6 +5,7 @@ export interface DesktopSettings {
   groqApiKey: string;
   indexDir: string;
   shortcut: string;
+  shortcutRegistrationError?: string;
 }
 
 export function isTauriRuntime() {

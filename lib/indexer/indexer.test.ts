@@ -216,6 +216,24 @@ describe("indexFile", () => {
     expect(chunks.filter((chunk) => chunk.contextSource === "imageVisualCaption")).toHaveLength(1);
     expect(await repo.getRepairTasks()).toHaveLength(0);
   });
+
+  it("records file indexing failures without hiding the error", async () => {
+    const filePath = path.join(root, "broken.md");
+    await fs.writeFile(filePath, "broken embedding");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, text: async () => "embedding unavailable" })),
+    );
+
+    await expect(indexFile(filePath)).rejects.toThrow("Gemini embedding failed");
+
+    const counts = await repository.getCounts();
+    expect(counts.failures).toHaveLength(1);
+    expect(counts.failures[0]).toMatchObject({
+      filePath,
+      message: expect.stringContaining("embedding unavailable"),
+    });
+  });
 });
 
 async function getMockedRepository(): Promise<IndexRepository> {

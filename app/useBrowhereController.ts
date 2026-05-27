@@ -17,6 +17,7 @@ const DEFAULT_SETTINGS: DesktopSettings = {
   groqApiKey: "",
   indexDir: "",
   shortcut: "CommandOrControl+Shift+Space",
+  shortcutRegistrationError: "",
 };
 
 export function useBrowhereController() {
@@ -128,7 +129,11 @@ export function useBrowhereController() {
   async function updateSettings(next: DesktopSettings) {
     setSettings(next);
     const saved = await saveDesktopSettings(next);
-    setMessage(saved ? "Desktop settings saved." : "Settings are available in the desktop app.");
+    setMessage(
+      saved
+        ? "Desktop settings saved. Restart Browhere to apply runtime keys, index directory, or shortcut changes."
+        : "Settings are available in the desktop app.",
+    );
   }
 
   const providerLabel = useMemo(() => {
@@ -142,7 +147,8 @@ export function useBrowhereController() {
     const repair = status?.repair;
     if (!repair) return "Repair queue unavailable";
     const nextRetry = repair.nextRetryAt ? ` / next ${formatIndexedAt(repair.nextRetryAt)}` : "";
-    return `Repair ${repair.queuedCount} queued / ${repair.cooldownCount} cooldown / ${repair.runningCount} running${nextRetry}`;
+    const lastError = repair.lastError ? ` / last error: ${repair.lastError}` : "";
+    return `Repair ${repair.queuedCount} queued / ${repair.cooldownCount} cooldown / ${repair.runningCount} running${nextRetry}${lastError}`;
   }, [status]);
 
   return {

@@ -281,4 +281,31 @@ describe("IndexRepository", () => {
     expect(await repo.getCounts()).toMatchObject({ files: 0, chunks: 0 });
     expect(await repo.vectorSearch([0.1, 0.2, 0.3, 0.4], 5)).toEqual([]);
   });
+
+  it("reports persisted failures and repair last errors in counts", async () => {
+    await repo.addFolder("/tmp/docs");
+    await repo.recordFailure("/tmp/docs/broken.md", "Embedding failed.");
+    await repo.upsertRepairTask({
+      id: "repair-1",
+      fileId: "file-1",
+      filePath: "/tmp/docs/image.png",
+      contentMarker: "1:1",
+      operation: "imageLabel",
+      status: "cooldown",
+      retryCount: 1,
+      nextRetryAt: 123,
+      lastError: "Quota exhausted.",
+      errorKind: "quota",
+    });
+
+    const counts = await repo.getCounts();
+    expect(counts.failures).toEqual([
+      expect.objectContaining({ filePath: "/tmp/docs/broken.md", message: "Embedding failed." }),
+    ]);
+    expect(counts.repair).toMatchObject({
+      cooldownCount: 1,
+      nextRetryAt: 123,
+      lastError: "Quota exhausted.",
+    });
+  });
 });

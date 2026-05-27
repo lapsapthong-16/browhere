@@ -1,9 +1,5 @@
-# image-labeling Specification
+## MODIFIED Requirements
 
-## Purpose
-Define how supported image files produce searchable visual-caption and OCR evidence for retrieval.
-
-## Requirements
 ### Requirement: Generate Image Labels
 The system SHALL generate searchable AI visual captions for supported image files using configured cloud vision behavior, and SHALL repair missing caption evidence without duplicating existing records.
 
@@ -24,24 +20,6 @@ The system SHALL generate searchable AI visual captions for supported image file
 - **THEN** the file label status MUST become `generated`
 - **AND** exactly one visual-caption evidence record MUST exist for that file identity
 - **AND** the corresponding repair task MUST be removed.
-
-### Requirement: Label Captures Retrieval Evidence
-The system SHALL generate visual captions that are useful for search explanations and reranking.
-
-#### Scenario: Visible image evidence exists
-- **WHEN** the image contains recognizable objects, logos, places, scenes, colors, layout, or visual details
-- **THEN** the generated visual caption MUST include those visible details when available
-- **AND** avoid claiming facts that are not visible in the image or metadata.
-
-#### Scenario: Image contains readable text
-- **WHEN** the image contains readable signs, screenshots, document text, labels, or menus
-- **THEN** readable text MUST be captured as OCR-text evidence when OCR behavior is available
-- **AND** visual caption text MAY summarize that text only as visible evidence.
-
-#### Scenario: Image has no useful visible content
-- **WHEN** the image does not contain recognizable visual evidence
-- **THEN** the generated visual caption MUST indicate limited visible content
-- **AND** the system MUST still store file metadata for retrieval fallback.
 
 ### Requirement: Persist Image Label Provenance
 The system SHALL track whether result context came from generated visual captions or OCR-text evidence.

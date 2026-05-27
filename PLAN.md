@@ -519,3 +519,10 @@ The migration is complete when:
 - Settings and index data persist outside the source repository.
 - Final checking in Phase 9 passes.
 
+## Current Implementation Notes
+
+- The desktop shell, compact search route, native folder picker, open/reveal actions, and app-scoped desktop index default are implemented.
+- Native open/reveal actions are expected to be authorized against approved indexed folders at the Tauri command boundary.
+- Desktop provider keys are separated from general preferences under the app data directory, but Keychain-backed secret storage remains pending.
+- The packaged app copies the Next standalone runtime into app resources, but the current launcher still uses a host `node` executable. A bundled Node sidecar remains pending before broad distribution.
+- Use `docs/desktop-verification.md` for the current manual desktop release checklist.

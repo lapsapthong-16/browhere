@@ -40,4 +40,18 @@ if (!fs.existsSync(serverPath)) {
   throw new Error(`Packaged runtime is missing ${serverPath}`);
 }
 
+fs.writeFileSync(
+  path.join(appResources, "browhere-runtime-manifest.json"),
+  JSON.stringify(
+    {
+      runtime: ".next/standalone/server.js",
+      static: ".next/standalone/.next/static",
+      node: "host-node-required",
+      note: "Browhere packages the Next standalone server into the app resources. The current runtime launcher uses a host Node.js executable.",
+    },
+    null,
+    2,
+  ),
+);
+
 console.log(`Packaged Next runtime into ${standaloneTarget}`);

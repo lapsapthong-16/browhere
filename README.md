@@ -85,6 +85,8 @@ Open the standalone architecture and user-flow diagram:
 
 - [architecture-flow.html](./architecture-flow.html)
 
+For a visual, presentation-style version of this README, open [README.html](./README.html) in a browser.
+
 ## Tech Stack
 
 - Next.js App Router
@@ -189,6 +191,8 @@ You can also start it by double-clicking `/Applications/Browhere.app` in Finder.
 
 If the global shortcut does not open the search window, close any running `npm run tauri:dev` or `npm run tauri` instance first. Only one app can own `Command+Shift+Space` at a time.
 
+The current packaged launcher includes the Next standalone runtime assets in the app bundle, but it still requires a host `node` executable. Install Node.js before launching the packaged app on a clean machine. A fully bundled Node sidecar is a remaining packaging hardening task.
+
 ## Usage
 
 1. Start `/Applications/Browhere.app`.
@@ -199,7 +203,9 @@ If the global shortcut does not open the search window, close any running `npm r
 6. Review ranked results, match context, readiness state, and source type.
 7. Remove a folder when you no longer want that folder included in search.
 
-The default local index path is `.browhere/index`. Override it with `BROWHERE_INDEX_DIR`.
+In the web development app, the default local index path is `.browhere/index`. In the packaged desktop app, Browhere defaults to the macOS app data directory and stores the index under `index/`. Override either flow with `BROWHERE_INDEX_DIR` during development or advanced testing.
+
+Desktop settings are stored under the macOS app data directory. Provider keys are separated from general preferences, but they are not yet stored in macOS Keychain.
 
 ## Scripts
 
@@ -279,6 +285,10 @@ npm run test:e2e
 
 Playwright starts the development server automatically from `playwright.config.ts`.
 
+Run desktop verification before calling a Tauri build release-ready:
+
+- [docs/desktop-verification.md](./docs/desktop-verification.md)
+
 ## Current Scope
 
-Browhere is a V1 local web app. It does not provide desktop-native open/reveal actions, user accounts, hosted sync, spreadsheet/audio/video indexing, or a remote vector database. Those can be added later without changing the core approved-folder and local-index model.
+Browhere is a V1 local-first desktop/web app. It provides approved-folder indexing, semantic search, a Tauri desktop shell, a compact search window, native folder picking, and desktop open/reveal actions for approved indexed files. It does not provide user accounts, hosted sync, spreadsheet/audio/video indexing, a remote vector database, Keychain-backed secret storage, a bundled Node sidecar, signing/notarization, or auto-update.

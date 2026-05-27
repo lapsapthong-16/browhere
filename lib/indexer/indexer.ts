@@ -14,6 +14,7 @@ import type { ChunkRecord, FileMetadata, IndexedFileRecord, RepairErrorKind, Rep
 
 const watchers = new Map<string, FSWatcher>();
 const timers = new Map<string, NodeJS.Timeout>();
+let repairTimer: NodeJS.Timeout | undefined;
 let running = false;
 let repairing = false;
 const MAX_REPAIR_TASKS_PER_RUN = 3;
@@ -26,7 +27,7 @@ export async function addFolder(folderPath: string) {
   await repository.addFolder(folderPath);
   await watchFolder(path.resolve(folderPath));
   void enqueueFolder(path.resolve(folderPath));
-  void runRepairQueue();
+  scheduleRepairQueue();
 }
 
 export async function removeFolder(folderPath: string) {
@@ -50,7 +51,7 @@ export async function removeFolder(folderPath: string) {
 export async function ensureWatchers() {
   const folders = await repository.getFolders();
   await Promise.all(folders.map((folder) => watchFolder(folder.path)));
-  void runRepairQueue();
+  scheduleRepairQueue();
 }
 
 export async function enqueueFolder(folderPath: string) {
@@ -113,7 +114,7 @@ async function drainQueue() {
     runtimeState.state = "ready";
     runtimeState.currentFilePath = undefined;
     await repository.setLastIndexedAt();
-    void runRepairQueue();
+    scheduleRepairQueue();
   } catch (error) {
     runtimeState.state = "failed";
   } finally {
@@ -122,6 +123,15 @@ async function drainQueue() {
 }
 
 export async function indexFile(filePath: string) {
+  try {
+    await indexFileInternal(filePath);
+  } catch (error) {
+    await repository.recordFailure(filePath, errorMessage(error));
+    throw error;
+  }
+}
+
+async function indexFileInternal(filePath: string) {
   if (!(await isApprovedFile(filePath))) {
     await repository.deleteByPath(filePath);
     return;
@@ -145,7 +155,7 @@ export async function indexFile(filePath: string) {
     if (!hasHandledImageOcr) {
       await queueImageOcrRepair(existing, existing.ocrReason || "Image OCR pending.");
     }
-    void runRepairQueue();
+    scheduleRepairQueue();
     return;
   }
   const existingChunks = unchanged && existing ? await repository.getChunksForFile(existing.id) : [];
@@ -372,11 +382,11 @@ export async function indexFile(filePath: string) {
   await repository.upsertChunks(fileId, chunks);
   if (imageFile && labelError) {
     await queueRepairTask(file, "imageLabel", labelError);
-    void runRepairQueue();
+    scheduleRepairQueue();
   }
   if (imageFile && ocrError) {
     await queueRepairTask(file, "imageOcr", ocrError);
-    void runRepairQueue();
+    scheduleRepairQueue();
   }
   if (imageFile && rawImageError) {
     await queueRepairTask(file, "rawImageEmbedding", rawImageError);
@@ -401,7 +411,26 @@ export async function runRepairQueue() {
     }
   } finally {
     repairing = false;
+    scheduleRepairQueue();
   }
+}
+
+export async function scheduleRepairQueue() {
+  if (repairTimer) {
+    clearTimeout(repairTimer);
+    repairTimer = undefined;
+  }
+  const tasks = await repository.getRepairTasks();
+  const nextRetryAt = tasks
+    .filter((task) => task.status !== "running")
+    .map((task) => task.nextRetryAt ?? 0)
+    .sort((left, right) => left - right)[0];
+  if (nextRetryAt === undefined) return;
+  const delay = Math.max(0, nextRetryAt - Date.now());
+  repairTimer = setTimeout(() => {
+    repairTimer = undefined;
+    void runRepairQueue();
+  }, delay);
 }
 
 async function runRepairTask(task: RepairTask) {

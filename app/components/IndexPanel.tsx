@@ -121,7 +121,7 @@ export function IndexPanel({ controller }: IndexPanelProps) {
             <summary>
               <span>
                 <strong>Desktop settings</strong>
-                <small>{settings.shortcut}</small>
+                <small>{settings.shortcutRegistrationError || settings.shortcut}</small>
               </span>
               <span className="chevron" aria-hidden="true" />
             </summary>
@@ -152,7 +152,12 @@ export function IndexPanel({ controller }: IndexPanelProps) {
               </label>
               <label>
                 <span>Shortcut</span>
-                <input name="shortcut" defaultValue={settings.shortcut} />
+                <input
+                  name="shortcut"
+                  defaultValue={settings.shortcut}
+                  pattern="^(CommandOrControl|Command|Control|Alt|Option|Shift|Super|Cmd)(\\+[A-Za-z0-9]+)+$"
+                  title="Use a Tauri shortcut such as CommandOrControl+Shift+Space"
+                />
               </label>
               <button className="secondaryButton" type="submit">
                 Save

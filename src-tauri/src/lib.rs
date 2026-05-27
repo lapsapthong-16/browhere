@@ -12,12 +12,13 @@ use tauri::{
     menu::{Menu, PredefinedMenuItem, Submenu},
     Emitter, Manager, Url,
 };
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 #[derive(Default)]
 struct RuntimeState {
     child: Mutex<Option<Child>>,
     url: Mutex<Option<String>>,
+    shortcut_error: Mutex<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +28,22 @@ struct DesktopSettings {
     groq_api_key: String,
     index_dir: String,
     shortcut: String,
+    #[serde(default)]
+    shortcut_registration_error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopPreferences {
+    index_dir: String,
+    shortcut: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct DesktopSecrets {
+    gemini_api_key: String,
+    groq_api_key: String,
 }
 
 impl Default for DesktopSettings {
@@ -36,8 +53,29 @@ impl Default for DesktopSettings {
             groq_api_key: String::new(),
             index_dir: String::new(),
             shortcut: "CommandOrControl+Shift+Space".to_string(),
+            shortcut_registration_error: String::new(),
         }
     }
+}
+
+impl Default for DesktopPreferences {
+    fn default() -> Self {
+        Self {
+            index_dir: String::new(),
+            shortcut: "CommandOrControl+Shift+Space".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct IndexMetadata {
+    #[serde(default)]
+    folders: Vec<IndexedFolder>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IndexedFolder {
+    path: String,
 }
 
 #[tauri::command]
@@ -72,8 +110,9 @@ fn pick_folder() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn reveal_in_finder(path: String) -> Result<(), String> {
+fn reveal_in_finder(app: tauri::AppHandle, path: String) -> Result<(), String> {
     ensure_existing_path(&path)?;
+    ensure_approved_path(&app, &path)?;
     #[cfg(target_os = "macos")]
     {
         run_open_command(["-R", path.as_str()])
@@ -85,8 +124,9 @@ fn reveal_in_finder(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_path(path: String) -> Result<(), String> {
+fn open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     ensure_existing_path(&path)?;
+    ensure_approved_path(&app, &path)?;
     #[cfg(target_os = "macos")]
     {
         run_open_command([path.as_str()])
@@ -99,17 +139,45 @@ fn open_path(path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn load_settings(app: tauri::AppHandle) -> Result<DesktopSettings, String> {
-    read_settings(&settings_path(&app))
+    let mut settings = read_settings(&settings_path(&app))?;
+    if let Some(error) = app
+        .state::<RuntimeState>()
+        .shortcut_error
+        .lock()
+        .expect("shortcut error lock poisoned")
+        .clone()
+    {
+        settings.shortcut_registration_error = error;
+    }
+    Ok(settings)
 }
 
 #[tauri::command]
 fn save_settings(app: tauri::AppHandle, settings: DesktopSettings) -> Result<(), String> {
-    let path = settings_path(&app);
+    let app_data = app_data_dir(&app);
+    fs::create_dir_all(&app_data).map_err(|error| error.to_string())?;
+    let preferences = DesktopPreferences {
+        index_dir: settings.index_dir,
+        shortcut: settings.shortcut,
+    };
+    let secrets = DesktopSecrets {
+        gemini_api_key: settings.gemini_api_key,
+        groq_api_key: settings.groq_api_key,
+    };
+    fs::write(
+        settings_path(&app),
+        serde_json::to_string_pretty(&preferences).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let path = secrets_path(&app);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let payload = serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?;
-    fs::write(path, payload).map_err(|error| error.to_string())
+    fs::write(
+        path,
+        serde_json::to_string_pretty(&secrets).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -128,13 +196,9 @@ pub fn run() {
         .manage(RuntimeState::default())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, shortcut, event| {
+                .with_handler(|app, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
-                        if shortcut.key == Code::Escape {
-                            let _ = hide_search(app);
-                        } else {
-                            let _ = show_search(app);
-                        }
+                        let _ = show_search(app);
                     }
                 })
                 .build(),
@@ -167,11 +231,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Browhere")
         .run(|app, event| match event {
-            tauri::RunEvent::ExitRequested { api, .. } => {
-                api.prevent_exit();
+            tauri::RunEvent::ExitRequested { .. } => {
+                stop_next_runtime(app);
                 hide_all_windows(app);
             }
-            tauri::RunEvent::Exit => stop_next_runtime(app),
+            tauri::RunEvent::Exit => {
+                stop_next_runtime(app);
+            }
             _ => {}
         });
 }
@@ -265,11 +331,24 @@ fn install_resident_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 fn register_global_shortcuts(app: &tauri::AppHandle) {
-    if let Err(error) = app.global_shortcut().register("CommandOrControl+Shift+Space") {
-        eprintln!("Browhere shortcut unavailable: {error}");
-    }
-    if let Err(error) = app.global_shortcut().register("Escape") {
-        eprintln!("Browhere Escape shortcut unavailable: {error}");
+    let shortcut = read_settings(&settings_path(app))
+        .unwrap_or_default()
+        .shortcut
+        .trim()
+        .to_string();
+    let shortcut = if shortcut.is_empty() {
+        DesktopSettings::default().shortcut
+    } else {
+        shortcut
+    };
+    if let Err(error) = app.global_shortcut().register(shortcut.as_str()) {
+        let message = format!("Browhere shortcut unavailable: {error}");
+        eprintln!("{message}");
+        *app
+            .state::<RuntimeState>()
+            .shortcut_error
+            .lock()
+            .expect("shortcut error lock poisoned") = Some(message);
     }
 }
 
@@ -387,6 +466,10 @@ fn settings_path(app: &tauri::AppHandle) -> PathBuf {
     app_data_dir(app).join("settings.json")
 }
 
+fn secrets_path(app: &tauri::AppHandle) -> PathBuf {
+    app_data_dir(app).join("secrets.json")
+}
+
 fn app_data_dir(app: &tauri::AppHandle) -> PathBuf {
     app.path()
         .app_data_dir()
@@ -394,9 +477,39 @@ fn app_data_dir(app: &tauri::AppHandle) -> PathBuf {
 }
 
 fn read_settings(path: &Path) -> Result<DesktopSettings, String> {
+    let app_data = path.parent().unwrap_or_else(|| Path::new("."));
+    let preferences = read_preferences(path)?;
+    let secrets = read_secrets(&app_data.join("secrets.json"))?;
+    Ok(DesktopSettings {
+        gemini_api_key: secrets.gemini_api_key,
+        groq_api_key: secrets.groq_api_key,
+        index_dir: preferences.index_dir,
+        shortcut: preferences.shortcut,
+        shortcut_registration_error: String::new(),
+    })
+}
+
+fn read_preferences(path: &Path) -> Result<DesktopPreferences, String> {
+    match fs::read_to_string(path) {
+        Ok(payload) => {
+            if let Ok(preferences) = serde_json::from_str::<DesktopPreferences>(&payload) {
+                return Ok(preferences);
+            }
+            let legacy: DesktopSettings = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+            Ok(DesktopPreferences {
+                index_dir: legacy.index_dir,
+                shortcut: legacy.shortcut,
+            })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(DesktopPreferences::default()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn read_secrets(path: &Path) -> Result<DesktopSecrets, String> {
     match fs::read_to_string(path) {
         Ok(payload) => serde_json::from_str(&payload).map_err(|error| error.to_string()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(DesktopSettings::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(DesktopSecrets::default()),
         Err(error) => Err(error.to_string()),
     }
 }
@@ -407,6 +520,41 @@ fn ensure_existing_path(path: &str) -> Result<(), String> {
     } else {
         Err("File path no longer exists.".to_string())
     }
+}
+
+fn ensure_approved_path(app: &tauri::AppHandle, input_path: &str) -> Result<(), String> {
+    let canonical = Path::new(input_path)
+        .canonicalize()
+        .map_err(|_| "File path no longer exists.".to_string())?;
+    let metadata_path = index_dir_for(app).join("metadata.json");
+    let payload = fs::read_to_string(&metadata_path)
+        .map_err(|_| "Approved folder metadata is unavailable.".to_string())?;
+    let metadata: IndexMetadata = serde_json::from_str(&payload)
+        .map_err(|error| format!("Approved folder metadata is invalid: {error}"))?;
+    let approved = metadata.folders.iter().any(|folder| {
+        Path::new(&folder.path)
+            .canonicalize()
+            .map(|root| is_within_folder(&canonical, &root))
+            .unwrap_or(false)
+    });
+    if approved {
+        Ok(())
+    } else {
+        Err("File is outside approved indexed folders.".to_string())
+    }
+}
+
+fn index_dir_for(app: &tauri::AppHandle) -> PathBuf {
+    let settings = read_settings(&settings_path(app)).unwrap_or_default();
+    if settings.index_dir.trim().is_empty() {
+        app_data_dir(app).join("index")
+    } else {
+        PathBuf::from(settings.index_dir.trim())
+    }
+}
+
+fn is_within_folder(file_path: &Path, folder_path: &Path) -> bool {
+    file_path == folder_path || file_path.starts_with(folder_path)
 }
 
 #[cfg(target_os = "macos")]

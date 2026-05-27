@@ -1,17 +1,4 @@
-## Requirements
-
-### Requirement: Launch Browhere As A macOS App
-The system SHALL provide a Tauri-based macOS app shell that launches Browhere without requiring the user to open a browser manually.
-
-#### Scenario: App is launched from Finder
-- **WHEN** the user opens the packaged Browhere app from Finder
-- **THEN** the system MUST start the native Tauri app shell
-- **AND** the system MUST display the Browhere UI in a desktop window.
-
-#### Scenario: App is launched in development
-- **WHEN** the developer runs the Tauri development command
-- **THEN** the system MUST load the local Next development server in the Tauri webview
-- **AND** the existing browser development workflow MUST remain available.
+## MODIFIED Requirements
 
 ### Requirement: Manage The Next Runtime
 The system SHALL manage the server-side runtime required by the existing Next.js API routes when running as a desktop app, without depending on a manually started terminal server or the source repository path in packaged mode.
@@ -37,6 +24,8 @@ The system SHALL manage the server-side runtime required by the existing Next.js
 - **THEN** the system MUST stop the managed Next runtime
 - **AND** the system MUST NOT leave orphaned runtime processes.
 
+## ADDED Requirements
+
 ### Requirement: Avoid Source Checkout Data Dependency
 The system SHALL keep installed-app data and runtime assets independent from the development source checkout.
 
@@ -49,28 +38,3 @@ The system SHALL keep installed-app data and runtime assets independent from the
 - **WHEN** `BROWHERE_INDEX_DIR` or an equivalent development override is set
 - **THEN** Browhere MUST respect that override in development
 - **AND** packaged default behavior MUST still use app-scoped data paths.
-
-### Requirement: Preserve Existing Local-First Behavior
-The system SHALL preserve the current local indexing and search behavior inside the desktop app.
-
-#### Scenario: Index status is requested in desktop app
-- **WHEN** the Tauri-hosted UI requests index status
-- **THEN** the system MUST return the same folder, provider, queue, repair, and document-log state exposed by the existing web app.
-
-#### Scenario: Search is submitted in desktop app
-- **WHEN** the Tauri-hosted UI submits a search query
-- **THEN** the system MUST use the existing local index and provider-backed search pipeline
-- **AND** results MUST remain limited to approved indexed folders.
-
-### Requirement: Build Release Artifacts
-The system SHALL build deployable macOS desktop artifacts through the Tauri build flow.
-
-#### Scenario: Release build is run
-- **WHEN** the developer runs the Tauri build command
-- **THEN** the system MUST produce a macOS app bundle artifact
-- **AND** the artifact MUST include the runtime assets needed to launch Browhere without the source repository.
-
-#### Scenario: Packaged app is moved
-- **WHEN** the built app is moved to `/Applications`
-- **THEN** the system MUST still launch successfully
-- **AND** app data MUST NOT depend on the original source checkout path.

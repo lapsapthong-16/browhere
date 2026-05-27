@@ -44,16 +44,18 @@ interface Metadata {
   lastIndexedAt?: number;
 }
 
-const DEFAULT_METADATA: Metadata = {
-  schemaVersion: 2,
-  folders: [],
-  failures: [],
-  documents: [],
-  repairTasks: [],
-  documentLogInitialized: false,
-  skippedCount: 0,
-  unsupportedCount: 0,
-};
+function defaultMetadata(): Metadata {
+  return {
+    schemaVersion: 2,
+    folders: [],
+    failures: [],
+    documents: [],
+    repairTasks: [],
+    documentLogInitialized: false,
+    skippedCount: 0,
+    unsupportedCount: 0,
+  };
+}
 
 export interface VectorCandidate extends ChunkRecord {
   score: number;
@@ -225,7 +227,7 @@ export class IndexRepository {
   async getCounts() {
     const metadata = await this.readMetadata();
     const documents = await this.getApprovedDocumentLogs(metadata);
-    const repair = repairCounts(metadata.repairTasks);
+    const repair = repairCounts(await this.getRepairTasks());
     return {
       files: documents.length,
       chunks: documents.reduce((total, document) => total + document.chunkCount, 0),
@@ -233,7 +235,7 @@ export class IndexRepository {
       partial: documents.filter((document) => document.status === "partial").length,
       skipped: metadata.skippedCount,
       unsupported: metadata.unsupportedCount,
-      failures: [],
+      failures: metadata.failures,
       lastIndexedAt: metadata.lastIndexedAt,
       documents,
       repair,
@@ -269,8 +271,13 @@ export class IndexRepository {
     await this.writeMetadata(metadata);
   }
 
-  async recordFailure(_filePath: string, _message: string) {
-    await this.clearFailures();
+  async recordFailure(filePath: string, message: string) {
+    const metadata = await this.readMetadata();
+    metadata.failures = [
+      { filePath, message, at: Date.now() },
+      ...metadata.failures.filter((failure) => failure.filePath !== filePath || failure.message !== message),
+    ].slice(0, 50);
+    await this.writeMetadata(metadata);
   }
 
   async clearFailures() {
@@ -488,18 +495,21 @@ export class IndexRepository {
     const filePath = path.join(this.indexDir, META_FILE);
     try {
       const text = await fs.readFile(filePath, "utf8");
+      const defaults = defaultMetadata();
+      const raw = JSON.parse(text) as Partial<Metadata>;
       const metadata = {
-        ...DEFAULT_METADATA,
-        ...JSON.parse(text),
-        schemaVersion: DEFAULT_METADATA.schemaVersion,
-        failures: [],
+        ...defaults,
+        ...raw,
+        schemaVersion: defaults.schemaVersion,
+        failures: normalizeFailures(raw.failures),
       };
       metadata.repairTasks = normalizeRepairTasks(metadata.repairTasks);
       await this.writeMetadata(metadata);
       return metadata;
     } catch {
-      await this.writeMetadata(DEFAULT_METADATA);
-      return { ...DEFAULT_METADATA };
+      const metadata = defaultMetadata();
+      await this.writeMetadata(metadata);
+      return metadata;
     }
   }
 
@@ -721,6 +731,19 @@ function normalizeRepairTasks(value: unknown): RepairTask[] {
   });
 }
 
+function normalizeFailures(value: unknown): IndexFailure[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((failure): failure is IndexFailure => {
+    if (!failure || typeof failure !== "object") return false;
+    const record = failure as Partial<IndexFailure>;
+    return (
+      typeof record.filePath === "string" &&
+      typeof record.message === "string" &&
+      typeof record.at === "number"
+    );
+  });
+}
+
 function repairCounts(tasks: RepairTask[]) {
   const nextRetryAt = tasks
     .map((task) => task.nextRetryAt)
@@ -731,6 +754,7 @@ function repairCounts(tasks: RepairTask[]) {
     cooldownCount: tasks.filter((task) => task.status === "cooldown").length,
     runningCount: tasks.filter((task) => task.status === "running").length,
     nextRetryAt,
+    lastError: tasks.find((task) => task.lastError)?.lastError,
   };
 }
 
