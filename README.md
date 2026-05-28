@@ -1,111 +1,109 @@
 # Browhere
 
-Browhere is a local-first semantic search app for personal folders. It indexes only the folders you approve, stores the vector database on your machine, and lets you find files by meaning instead of exact filenames.
+Browhere is a local-first semantic search app for personal folders. It indexes only the folders you approve, stores the searchable index on your machine, and lets you find files by meaning instead of exact filenames.
 
-It is built for the common problem of knowing what a file was about, what an image looked like, or which project folder it belonged to, but not remembering its name or path.
+It is built as a Next.js app with a Tauri macOS shell, local LanceDB storage, Gemini embeddings, and optional Groq-assisted query planning and answer generation.
+
+## Story Scenario
+
+Maya is preparing a client update and remembers saving a PDF about budget risks, a screenshot of a menu board, and notes about launch concerns across different project folders. The filenames are vague, the screenshot has no useful filename, and Finder search only helps if she remembers exact words.
+
+With Browhere, she approves the project folder once, waits for the local index to finish, then searches with phrases like `budget PDF from reports folder` or `what words are visible on the menu screenshot`. Browhere returns ranked local files with match context, evidence type, and desktop actions to open or reveal the file.
 
 ## Problem Statement
 
-Desktop file search is still mostly literal. It works when you remember exact filenames, extensions, or words inside a document, but it breaks down when:
+Desktop file search is still mostly literal. It works when you remember exact filenames, extensions, or text inside a document, but it breaks down when:
 
 - the filename is vague, such as `IMG_4021.jpg` or `notes-final-v3.md`;
 - the file is an image with no searchable text;
-- the useful signal is in PDF or DOCX contents;
-- the user remembers a concept, brand, scene, topic, or folder context rather than a string;
-- the user does not want to upload an entire folder archive to a hosted search product.
+- the useful signal is inside a PDF or DOCX;
+- the user remembers a concept, visual detail, topic, or folder context instead of a string;
+- the user does not want to upload entire folder archives to a hosted search product.
 
-Browhere solves this by turning approved local folders into a searchable semantic index while keeping the index local.
+Browhere addresses this by turning explicitly approved local folders into a semantic index while keeping the folder list, file records, metadata, and vector database local.
 
 ## Solution
 
-Browhere runs as a Next.js app on your machine. You approve one or more folder paths in the browser UI. The app discovers supported files, extracts useful text or image context, generates embeddings with Gemini, stores searchable vectors in LanceDB locally, and returns ranked file matches for natural-language queries.
+Browhere discovers supported files under approved folders, extracts text and safe metadata, generates embeddings through Gemini, stores vectors in LanceDB, and returns ranked matches for natural-language searches.
 
-For stronger retrieval, Browhere can use Groq as a bounded retrieval agent. Groq may rewrite a query into a small number of retrieval passes and rerank candidate results, but it only receives the user query, candidate snippets, and safe metadata from already approved folders.
+For stronger retrieval, Browhere can use Groq as a bounded retrieval agent. Groq may rewrite a query into a small number of retrieval passes, rerank candidates, and generate cited answers, but it only receives the user query, candidate snippets, context-source labels, and selected safe metadata from already approved folders.
 
-## What It Supports
+## Product Concept
 
-- Local folder approval and removal from the web UI
-- Recursive indexing for `txt`, `md`, `pdf`, `docx`, `png`, `jpg`, and `jpeg`
-- File watching for additions, edits, and deletions
-- Default exclusions for sensitive or noisy paths such as `.env`, `.git`, `node_modules`, caches, build output, `*.key`, and `*.pem`
-- Text extraction for plain text, Markdown, PDF, and DOCX files
-- Raw image embeddings and generated image labels for searchable visual context
-- Searchable metadata context from safe fields such as display name, file type, parent folders, size class, and modified time
-- Local LanceDB persistence for vectors, chunks, file records, folder state, and indexing metadata
-- Optional Groq query planning and reranking
-- UI visibility into folder status, indexed files, chunks, failures, partial results, and image-label state
+Browhere is a private desktop search layer for people who work across messy local folders.
 
-## User Scenarios
+Key features:
 
-| Scenario | User action | How Browhere responds |
-| --- | --- | --- |
-| Find a topic inside a document | Search `document about lizards` | Embeds the query with Gemini, searches local LanceDB chunks, groups matches by file, and returns relevant text/PDF/DOCX files even if the filename does not contain `lizards`. |
-| Find an image by visual memory | Search `photo of a restaurant sign` | Searches raw image vectors and generated image-label embeddings. If the caption exists, it is shown as match context. If captioning is pending, Browhere can still show an unconfirmed visual match. |
-| Find by file context | Search `finance pdf from reports folder` | Uses metadata embeddings and lexical fallback over display name, file path, folder names, media type, and safe metadata fields. |
-| Add a new folder | Submit an absolute folder path | Normalizes and persists the folder as an approved root, scans supported files, starts watchers, and updates indexing status in the UI. |
-| Edit or add a file after indexing | Save a supported file under an approved folder | Chokidar detects the change and queues the file for reindexing without a manual refresh action. |
-| Delete a file | Remove a previously indexed file from disk | Browhere prunes or marks stale records so future search results do not present the deleted file as available. |
-| Gemini key is missing | Start the app without `GEMINI_API_KEY` | Indexing and semantic search report provider-unavailable status and file contents are not sent for embeddings. |
-| Groq key is missing | Start the app without `GROQ_API_KEY` | Browhere still performs basic Gemini vector search. Agentic query planning and reranking are disabled. |
-| Image labeling fails because of quota or provider issues | Index a supported image while labeling is unavailable | The raw image embedding is preserved when available, the file is marked partial or pending for labels, and a repair task can retry later. |
-| Remove an approved folder | Click remove for a folder | Browhere stops watching that folder and excludes its indexed records from future searches. |
+- approve and remove local folders from the UI;
+- recursively index `txt`, `md`, `pdf`, `docx`, `png`, `jpg`, and `jpeg` files;
+- watch approved folders for additions, edits, and deletions;
+- skip common sensitive or noisy paths such as `.env`, `.git`, `node_modules`, caches, build output, `*.key`, and `*.pem`;
+- extract text from plain text, Markdown, PDF, and DOCX files;
+- create image evidence through raw image embeddings, visual captions, OCR text, and safe metadata;
+- search with semantic, lexical, metadata, OCR, and visual evidence signals;
+- show readiness, provider status, indexed document logs, repair queue state, partial indexing, and failures;
+- open, reveal, or copy result paths from the Tauri desktop app;
+- use `CommandOrControl+Shift+Space` for a compact search window.
 
-## Privacy Model
+## User Flow
 
-Browhere is local-first, not offline-only.
-
-- The folder list, vector index, file records, extracted chunks, and metadata are stored locally in the configured index directory.
-- Only folders explicitly approved in the UI are indexed.
-- Default exclusions prevent common sensitive and generated paths from being indexed or sent to providers.
-- Gemini receives indexed content or image data when embeddings or image labels are generated.
-- Groq receives only bounded search payloads: the query, candidate snippets, context-source labels, and selected safe metadata.
-- Groq does not receive full folder contents, non-candidate chunks, or files outside approved folders.
-
-Use narrow test folders when working with private data.
-
-## Architecture
-
-```text
-Browser UI
-  | approve folders, search queries, status polling
-  v
-Next.js API routes
-  | /api/folders, /api/index/status, /api/search
-  v
-Indexer and Search Orchestration
-  | discovery, extraction, watchers, repair queue, query planning
-  v
-Local Storage + AI Providers
-  | LanceDB/local metadata on disk
-  | Gemini embeddings and image labels
-  | optional Groq planning and reranking
+```mermaid
+flowchart TD
+  A[User opens Browhere] --> B[Configure provider keys]
+  B --> C[Approve local folder]
+  C --> D[Index supported files]
+  D --> E[Watch folder changes]
+  E --> F[Search by memory or concept]
+  F --> G[Review ranked evidence]
+  G --> H[Open, reveal, or copy path]
+  G --> I[Remove folder when no longer needed]
 ```
 
-Open the standalone architecture and user-flow diagram:
+## System Architecture Flow
 
-- [architecture-flow.html](./architecture-flow.html)
-
-For a visual, presentation-style version of this README, open [README.html](./README.html) in a browser.
+```mermaid
+flowchart LR
+  A[Next.js UI] --> B[API Routes]
+  B --> C[Indexer]
+  C --> D[File Discovery]
+  C --> E[Extraction Pipeline]
+  E --> F[Gemini Embeddings and Vision]
+  E --> G[Optional Hugging Face Captions]
+  C --> H[LanceDB Local Index]
+  A --> I[Tauri Desktop Shell]
+  I --> J[Folder Picker and File Actions]
+  B --> K[Search Orchestrator]
+  K --> H
+  K --> L[Optional Groq Planner and Answerer]
+  K --> A
+```
 
 ## Tech Stack
 
-- Next.js App Router
-- React 19
-- TypeScript
-- LanceDB for local vector storage
-- Gemini for text embeddings, multimodal embeddings, and image labels
-- Groq for optional query planning and reranking
-- Chokidar for folder watching
-- Mammoth and pdf-parse for document extraction
-- Vitest, Testing Library, and Playwright for tests
+| Area | Technologies |
+| --- | --- |
+| Frontend | Next.js App Router, React 19, TypeScript |
+| Desktop | Tauri 2, Rust, macOS app bundle, global shortcut plugin |
+| Local Storage | LanceDB, local JSON metadata, app data directory |
+| File Processing | Chokidar, pdf-parse, Mammoth, Node.js filesystem APIs |
+| AI / APIs | Gemini embeddings and vision, optional Hugging Face image captions, optional Groq planning/reranking/answers |
+| Validation | Zod |
+| Testing | Vitest, Testing Library, Playwright |
+| Packaging | Next standalone output, custom Tauri runtime packaging script |
 
-## Requirements
+## Smart Contracts
+
+This project does not use smart contracts.
+
+## Getting Started
+
+Requirements:
 
 - Node.js 20 or newer
+- npm
+- Rust toolchain for Tauri development and desktop builds
 - Gemini API key for indexing and semantic search
-- Groq API key if you want agentic query planning and reranking
-
-## Setup
+- Groq API key only if you want agentic query planning, reranking, or answer generation
 
 Install dependencies:
 
@@ -113,7 +111,7 @@ Install dependencies:
 npm i
 ```
 
-Create `.env.local`:
+Create `.env.local` for web development:
 
 ```bash
 GEMINI_API_KEY=your_gemini_key
@@ -121,24 +119,43 @@ GROQ_API_KEY=your_groq_key
 HUGGINGFACE_API_KEY=your_huggingface_key
 ```
 
-Groq is optional. Gemini is required for embeddings.
+Gemini is required for embeddings. Groq and Hugging Face are optional.
 
-Optional configuration:
+## Environment Variables
 
-```bash
-BROWHERE_INDEX_DIR=.browhere/index
-BROWHERE_GEMINI_ENDPOINT=https://generativelanguage.googleapis.com/v1beta
-BROWHERE_GEMINI_EMBEDDING_MODEL=gemini-embedding-2
-BROWHERE_GEMINI_VISION_MODEL=gemini-2.0-flash
-BROWHERE_GEMINI_EMBEDDING_DIMENSIONS=3072
-BROWHERE_IMAGE_LABEL_PROVIDER=gemini
-BROWHERE_HUGGINGFACE_IMAGE_CAPTION_MODEL=google/gemma-3n-E4B-it:together
-BROWHERE_GROQ_ENDPOINT=https://api.groq.com/openai/v1/chat/completions
-BROWHERE_GROQ_MODEL=llama-3.3-70b-versatile
-BROWHERE_MAX_RETRIEVAL_PASSES=2
-```
+No `.env.example` file is present. These variables were inferred from `lib/config.ts`, tests, and the Tauri launcher.
 
-Run the web app in development:
+| Variable | Purpose |
+| --- | --- |
+| `GEMINI_API_KEY` | Enables Gemini embeddings, image embeddings, image labels, and OCR-related vision work. |
+| `GROQ_API_KEY` | Enables optional Groq query planning, reranking, and answer generation. |
+| `HUGGINGFACE_API_KEY` / `HF_TOKEN` | Enables Hugging Face image captioning when selected as the image-label provider. |
+| `BROWHERE_INDEX_DIR` | Overrides the local index directory. Defaults to `.browhere/index` in web dev or the macOS app data index directory in desktop mode. |
+| `BROWHERE_APP_DATA_DIR` | Set by the Tauri launcher for packaged desktop runtime data. |
+| `BROWHERE_GEMINI_ENDPOINT` | Overrides the Gemini API endpoint. |
+| `BROWHERE_GEMINI_EMBEDDING_MODEL` | Overrides the Gemini embedding model. Default: `gemini-embedding-2`. |
+| `BROWHERE_GEMINI_VISION_MODEL` | Overrides the Gemini vision model. Default: `gemini-2.0-flash`. |
+| `BROWHERE_GEMINI_EMBEDDING_DIMENSIONS` | Overrides embedding dimensions. Default: `3072`. |
+| `BROWHERE_IMAGE_LABEL_PROVIDER` | Uses `gemini` by default; set to `huggingface` to use Hugging Face captions. |
+| `BROWHERE_HUGGINGFACE_ENDPOINT` | Overrides the Hugging Face router endpoint. |
+| `BROWHERE_HUGGINGFACE_IMAGE_CAPTION_MODEL` | Overrides the Hugging Face caption model. |
+| `BROWHERE_GROQ_ENDPOINT` | Overrides the Groq chat completions endpoint. |
+| `BROWHERE_GROQ_MODEL` | Overrides the Groq model. Default: `llama-3.3-70b-versatile`. |
+| `BROWHERE_FINAL_RESULT_LIMIT` | Default returned result count. |
+| `BROWHERE_MAX_FINAL_RESULT_LIMIT` | Maximum returned result count. |
+| `BROWHERE_SEMANTIC_TOP_K` | Semantic candidate count. |
+| `BROWHERE_MAX_SEMANTIC_TOP_K` | Maximum semantic candidate count. |
+| `BROWHERE_LEXICAL_TOP_K` | Lexical candidate count. |
+| `BROWHERE_MAX_LEXICAL_TOP_K` | Maximum lexical candidate count. |
+| `BROWHERE_MAX_RETRIEVAL_PASSES` | Maximum retrieval passes for agentic search. Default: `2`. |
+| `BROWHERE_ANSWER_CONTEXT_BUDGET` | Context budget for generated answers. |
+| `BROWHERE_MAX_ANSWER_CONTEXT_BUDGET` | Maximum generated-answer context budget. |
+
+Desktop settings can also be entered in the Tauri UI. The packaged app writes preferences and provider keys under the macOS app data directory; provider keys are separated from general preferences, but they are not yet stored in macOS Keychain.
+
+## Running Locally
+
+Run the web app:
 
 ```bash
 npm run dev
@@ -152,89 +169,74 @@ Run the desktop app in development:
 npm run tauri:dev
 ```
 
-This starts Tauri against the Next.js dev server. It is useful while coding, but it is not the same app bundle you click in `/Applications`.
+Build the web app:
 
-## Desktop App Build and Install
-
-The clickable macOS app lives at:
-
-```text
-/Applications/Browhere.app
+```bash
+npm run build
 ```
 
-After code changes, rebuilding does not automatically replace that installed app. Use both commands:
+Build and install the macOS desktop app:
 
 ```bash
 npm run tauri:build
 npm run tauri:install-app
+open /Applications/Browhere.app
 ```
 
-`npm run tauri:build` creates the release bundle at:
+The build command packages the Next standalone runtime into:
 
 ```text
 src-tauri/target/release/bundle/macos/Browhere.app
 ```
 
-`npm run tauri:install-app` copies that rebuilt bundle over:
+The install command copies that bundle to:
 
 ```text
 /Applications/Browhere.app
 ```
 
-Start the installed app:
+The current packaged launcher includes the Next standalone runtime assets in the app bundle, but it still requires a host `node` executable. Install Node.js before launching the packaged app on a clean machine. A fully bundled Node sidecar is still a packaging hardening task.
 
-```bash
-open /Applications/Browhere.app
-```
+Useful scripts:
 
-You can also start it by double-clicking `/Applications/Browhere.app` in Finder.
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the Next.js development server. |
+| `npm run build` | Build the Next.js app for production. |
+| `npm run start` | Start the production Next.js server. |
+| `npm run tauri:dev` | Start the Tauri desktop app against the dev server. |
+| `npm run tauri:build` | Build the macOS desktop release bundle and package the Next runtime. |
+| `npm run tauri:install-app` | Copy the release bundle to `/Applications/Browhere.app`. |
+| `npm run test` | Run Vitest tests. |
+| `npm run test:e2e` | Run Playwright tests. |
+| `npm run typecheck` | Run TypeScript checks. |
 
-If the global shortcut does not open the search window, close any running `npm run tauri:dev` or `npm run tauri` instance first. Only one app can own `Command+Shift+Space` at a time.
-
-The current packaged launcher includes the Next standalone runtime assets in the app bundle, but it still requires a host `node` executable. Install Node.js before launching the packaged app on a clean machine. A fully bundled Node sidecar is a remaining packaging hardening task.
-
-## Usage
-
-1. Start `/Applications/Browhere.app`.
-2. Open the main window from the app icon, or press `Command+Shift+Space` to open the search window.
-3. Enter an absolute local folder path in the approved folders form, or use the folder picker in the desktop app.
-4. Wait for the index status to show files and chunks.
-5. Search with natural language, for example `image of a restaurant sign`, `budget PDF`, or `notes about launch risks`.
-6. Review ranked results, match context, readiness state, and source type.
-7. Remove a folder when you no longer want that folder included in search.
-
-In the web development app, the default local index path is `.browhere/index`. In the packaged desktop app, Browhere defaults to the macOS app data directory and stores the index under `index/`. Override either flow with `BROWHERE_INDEX_DIR` during development or advanced testing.
-
-Desktop settings are stored under the macOS app data directory. Provider keys are separated from general preferences, but they are not yet stored in macOS Keychain.
-
-## Scripts
-
-```bash
-npm run dev        # Start the Next.js development server
-npm run build      # Build for production
-npm run start      # Start the production server
-npm run tauri:dev  # Start the desktop app in development
-npm run tauri:build # Build the macOS desktop release bundle
-npm run tauri:install-app # Copy the release bundle to /Applications/Browhere.app
-npm run test       # Run Vitest tests
-npm run test:e2e   # Run Playwright tests
-npm run typecheck  # Run TypeScript checks
-```
-
-## Project Layout
+## Project Structure
 
 ```text
-app/                 Next.js routes, UI, and API handlers
-lib/ai/              Gemini and Groq provider clients
-lib/files/           File discovery, exclusions, and extraction
-lib/indexer/         Folder watching, indexing, and repair queue
-lib/search/          Semantic search orchestration
-lib/storage/         LanceDB-backed repository and local metadata
-openspec/            Product specs and archived changes
-test/                Vitest setup
-tests/               Playwright tests
-architecture-flow.html
+app/                         Next.js routes, UI, API handlers, and desktop bridge
+app/api/folders/             Folder approval and removal API
+app/api/index/status/        Index status API
+app/api/search/              Search API
+app/components/              Search and index panels
+lib/ai/                      Gemini and Groq provider clients
+lib/files/                   File discovery, exclusions, and extraction
+lib/indexer/                 Folder watching, indexing, and repair queue
+lib/search/                  Semantic, lexical, visual, metadata, and answer orchestration
+lib/storage/                 LanceDB-backed repository and local metadata
+src-tauri/                   Tauri desktop shell, macOS commands, packaging config
+scripts/                     Runtime packaging utilities
+docs/                        Desktop verification notes
+openspec/                    Product specs and archived change history
+test/                        Vitest setup
+tests/                       Playwright tests
 ```
+
+## Demo / Screenshots
+
+For a visual, presentation-style version of the previous README, open [README.html](./README.html) in a browser.
+
+Add current product screenshots or a hosted demo link here after deployment.
 
 ## API Surface
 
@@ -243,32 +245,37 @@ architecture-flow.html
 | `/api/folders` | `GET` | Return approved folders and runtime status. |
 | `/api/folders` | `POST` | Approve and index a folder path. |
 | `/api/folders` | `DELETE` | Remove an approved folder and exclude its records. |
-| `/api/index/status` | `GET` | Return index state, provider readiness, counts, failures, and document log. |
+| `/api/index/status` | `GET` | Return index state, provider readiness, counts, failures, repair queue state, and document log. |
 | `/api/search` | `POST` | Search indexed files with a natural-language query. |
+
+## Privacy Model
+
+Browhere is local-first, not offline-only.
+
+- The folder list, vector index, file records, extracted chunks, and metadata are stored locally in the configured index directory.
+- Only folders explicitly approved in the UI are indexed.
+- Default exclusions prevent common sensitive and generated paths from being indexed or sent to providers.
+- Gemini receives indexed content or image data when embeddings, image labels, or OCR-related vision work is generated.
+- Hugging Face receives image captioning payloads only when `BROWHERE_IMAGE_LABEL_PROVIDER=huggingface`.
+- Groq receives bounded search payloads: the query, candidate snippets, context-source labels, and selected safe metadata.
+- Groq does not receive full folder contents, non-candidate chunks, or files outside approved folders.
+
+Use narrow test folders when working with private data.
 
 ## Testing
 
-The test suite is built around the risks in a local Agentic RAG system: indexing the right evidence, retrieving the right chunks, keeping provider failures bounded, generating cited answers only from retrieved context, and keeping the UI usable.
+The test suite covers the main risks in a local Agentic RAG system: indexing the right evidence, retrieving the right chunks, keeping provider failures bounded, generating cited answers only from retrieved context, and keeping the UI usable.
 
 | Test area | Files | What it assures |
 | --- | --- | --- |
-| File discovery and exclusions | `lib/files/discovery.test.ts`, `lib/files/exclusions.test.ts` | Supported files are discovered recursively while sensitive/noisy paths such as `.env`, `.git`, `node_modules`, keys, caches, and build outputs are skipped. |
-| Text and document extraction | `lib/files/extraction.test.ts` | Plain text, Markdown, PDF, and DOCX extraction produce searchable chunks or partial-status fallbacks when extraction is incomplete. |
-| Index persistence and migration safety | `lib/storage/repository.test.ts` | Folders, files, chunks, metadata, evidence provenance, and vectors are persisted in LanceDB and normalized safely for older records. |
-| Image evidence indexing | `lib/indexer/indexer.test.ts` | Raw image vectors, visual captions, OCR text, metadata records, provider failures, and repair tasks can coexist without failing the whole index. |
-| Provider clients | `lib/ai/gemini.test.ts`, `lib/ai/groq.test.ts` | Gemini embedding/vision behavior and Groq planning, reranking, and answer generation handle success and missing-provider cases. |
-| Retrieval quality fixtures | `lib/search/retrieval-eval.test.ts` | Representative queries return the expected top file, expected evidence source, citation behavior, and insufficient-evidence behavior. |
-| Search ranking and answer behavior | `lib/search/search.test.ts` | Hybrid scoring, top-k clamping, source caps, query interpretation, OCR/metadata boosts, Groq fallback, answer citations, and context budgeting work as expected. |
-| UI behavior | `app/page.test.tsx`, `tests/rag-search.spec.ts` | Search controls, folder controls, result provenance, answer display, and browser rendering remain visible and usable. |
-
-Key test cases include:
-
-- `document about reptiles in warm habitats` should retrieve the lizard document from extracted text.
-- `finance pdf from Reports folder` should retrieve a PDF using metadata and folder hints.
-- `what words are visible on the menu screenshot` should prioritize OCR-text evidence over a generic visual caption.
-- Answer mode should return citations that map to local file paths and evidence ids.
-- If retrieved evidence is insufficient or citations are invalid, answer mode should return an insufficient-evidence response instead of inventing facts.
-- If Groq is unavailable, search should still return ranked retrieval results and mark answer generation unavailable.
+| File discovery and exclusions | `lib/files/discovery.test.ts`, `lib/files/exclusions.test.ts` | Supported files are discovered recursively while sensitive/noisy paths are skipped. |
+| Text and document extraction | `lib/files/extraction.test.ts` | Plain text, Markdown, PDF, and DOCX extraction produce searchable chunks or partial-status fallbacks. |
+| Index persistence and migration safety | `lib/storage/repository.test.ts` | Folders, files, chunks, metadata, evidence provenance, and vectors are persisted and normalized safely. |
+| Image evidence indexing | `lib/indexer/indexer.test.ts` | Raw image vectors, visual captions, OCR text, metadata records, provider failures, and repair tasks can coexist. |
+| Provider clients | `lib/ai/gemini.test.ts`, `lib/ai/groq.test.ts` | Gemini and Groq behavior handles success and missing-provider cases. |
+| Retrieval quality fixtures | `lib/search/retrieval-eval.test.ts` | Representative queries return expected files, evidence sources, citation behavior, and insufficient-evidence behavior. |
+| Search ranking and answer behavior | `lib/search/search.test.ts` | Hybrid scoring, query interpretation, source caps, fallback behavior, answer citations, and context budgeting work as expected. |
+| UI behavior | `app/page.test.tsx`, `tests/rag-search.spec.ts` | Search controls, folder controls, result provenance, answer display, and browser rendering remain usable. |
 
 Run local checks:
 
@@ -283,12 +290,16 @@ Run browser tests:
 npm run test:e2e
 ```
 
-Playwright starts the development server automatically from `playwright.config.ts`.
+Playwright starts the development server automatically from `playwright.config.ts`. Run desktop verification before calling a Tauri build release-ready: [docs/desktop-verification.md](./docs/desktop-verification.md).
 
-Run desktop verification before calling a Tauri build release-ready:
+## Roadmap
 
-- [docs/desktop-verification.md](./docs/desktop-verification.md)
+- Bundle a Node sidecar so packaged desktop installs do not depend on a host Node.js executable.
+- Move desktop provider secrets into macOS Keychain.
+- Add signing, notarization, and auto-update for release distribution.
+- Add more file types such as spreadsheets, audio, and video.
+- Add richer screenshot/demo assets for judge or user-facing documentation.
 
-## Current Scope
+## Notes
 
-Browhere is a V1 local-first desktop/web app. It provides approved-folder indexing, semantic search, a Tauri desktop shell, a compact search window, native folder picking, and desktop open/reveal actions for approved indexed files. It does not provide user accounts, hosted sync, spreadsheet/audio/video indexing, a remote vector database, Keychain-backed secret storage, a bundled Node sidecar, signing/notarization, or auto-update.
+Browhere is currently a V1 local-first desktop/web app. It provides approved-folder indexing, semantic search, a Tauri desktop shell, a compact search window, native folder picking, and desktop open/reveal actions for approved indexed files. It does not provide user accounts, hosted sync, a remote vector database, Keychain-backed secret storage, a bundled Node sidecar, signing/notarization, or auto-update.

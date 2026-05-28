@@ -10,3 +10,4 @@ coverage
 src-tauri/target
 .browhere
 tsconfig.tsbuildinfo
+.agents

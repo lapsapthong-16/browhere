@@ -73,6 +73,12 @@
       "skillPath": "skills/redesign-skill/SKILL.md",
       "computedHash": "b405eee0e0e80fc243f731d9aa368bca307e356db7e6157d27101d369dac6726"
     },
+    "repo-readme-writer": {
+      "source": "lapsapthong-16/my-skills",
+      "sourceType": "github",
+      "skillPath": "skills/repo-readme-writer/SKILL.md",
+      "computedHash": "abb9ca065bd5053686ce1177bc34804dc9724666ce1d91916cdaaaee870b9b70"
+    },
     "stitch-design-taste": {
       "source": "Leonxlnx/taste-skill",
       "sourceType": "github",
